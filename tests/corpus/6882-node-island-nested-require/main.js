@@ -24,3 +24,14 @@ process.env.ISLAND_PHASE = 'after-start'
 console.log(viaExpression('first'))
 console.log(viaBinding('second'))
 console.log(lazy.kit.greet('getter'), lazy.kit === require('lazykit'))
+
+// A function's own binding of a package the module also requires at its
+// top level, called before that line runs.
+function early(name) {
+  const kit = require('lazykit')
+  return kit.greet(name)
+}
+console.log(early('local binding'))
+console.log(require('./spaced').viaSpaced('spaced'))
+const topKit = require('lazykit')
+console.log('top level', topKit.loads())
