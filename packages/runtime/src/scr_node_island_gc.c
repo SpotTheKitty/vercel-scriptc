@@ -433,6 +433,16 @@ static void gc_reset(size_t expect) {
   gc_failed = false;
 }
 
+/* The object export `e`'s representative stands for, as the walk counts
+ * it: the export's identity, except for a promise. A promise's identity is
+ * a plain cell the export table keeps (so a typed promise that crosses
+ * twice is one export); the counted object is the promise itself. */
+static const void *gc_referent(uint32_t e) {
+  const ScrDyn *v = scr_ni_export_value(e);
+  if (v != NULL && v->kind == SCR_DYN_PROMISE) return v->v.promise;
+  return scr_ni_export_identity(e);
+}
+
 /* The objects one analysis may walk before the exports it has not reached
  * yet count as held: a bounded pause, at the price of collecting their
  * cycles at a later GC. */
@@ -466,7 +476,7 @@ int scr_ni_host_gc_analyze(const uint32_t *exports, size_t n, ScrNodeGcResult *o
       gc_rooted[i] = 1;
       continue;
     }
-    const void *ident = scr_ni_export_identity(exports[i]);
+    const void *ident = gc_referent(exports[i]);
     if (ident != NULL && !gc_skip(ident)) gc_obj_node((void *)ident)->ident = (uint32_t)i + 1;
     gc_obj(scr_ni_export_value(exports[i]))->count--;
     gc_count();
@@ -479,6 +489,14 @@ int scr_ni_host_gc_analyze(const uint32_t *exports, size_t n, ScrNodeGcResult *o
     if (gc_rooted[i]) continue;
     NiGcNode *nd = gc_lookup(scr_ni_export_value(exports[i]));
     if (nd == NULL || nd->black) gc_rooted[i] = 1;
+    /* A box the export table alone holds still stands for its referent (a
+     * closure, a typed capsule's object): held natively, the export is a
+     * root, so its representative keeps its identity in V8's weak maps. */
+    const void *ident = gc_referent(exports[i]);
+    if (ident != NULL && ident != scr_ni_export_value(exports[i])) {
+      NiGcNode *in = gc_lookup(ident);
+      if (in != NULL && in->black) gc_rooted[i] = 1;
+    }
   }
   for (size_t i = 0; i < n; i++) {
     gc_rstart[i] = (uint32_t)gc_nreach;

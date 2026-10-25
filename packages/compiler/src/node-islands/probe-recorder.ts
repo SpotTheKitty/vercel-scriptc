@@ -79,10 +79,24 @@ function internalCaller() {
 
 const fnToString = Function.prototype.toString;
 const hasOwn = Object.prototype.hasOwnProperty;
+// A getter that only reads a binding (esbuild's and tsc's export getters):
+// reading it again reads the same binding. Any other getter can run code
+// on every read, so its member is not snapshotted.
+const BINDING_GETTER = /^(?:\(\)\s*=>\s*[\w$.]+|function\s*[\w$]*\s*\(\)\s*\{\s*return\s+[\w$.]+(?:\[[\w$]+\])?\s*;?\s*\}|get\s+[\w$]+\s*\(\)\s*\{\s*return\s+[\w$.]+\s*;?\s*\})$/;
+function bindingGetter(fn) {
+  let source = "";
+  try { source = fnToString.call(fn); } catch { return false; }
+  return BINDING_GETTER.test(source.trim());
+}
 function isConstructor(f) {
   try { Reflect.construct(String, [], f); return true; } catch { return false; }
 }
 function plainClass(f) {
+  // instanceof reads the prototype: without an object there, it throws.
+  const proto = Object.getOwnPropertyDescriptor(f, "prototype");
+  if (proto === undefined || !("value" in proto)) return false;
+  if (proto.value === null || (typeof proto.value !== "object" && typeof proto.value !== "function"))
+    return false;
   let source = "";
   try { source = fnToString.call(f); } catch { return false; }
   if (/\[native code\]\s*\}$/.test(source)) return false;
@@ -138,7 +152,7 @@ exports.probe = function probe(input) {
         // The module value's getters (esbuild's __export): read once, under
         // the recording, as Node reads CommonJS named exports after the
         // module evaluated.
-        if (depth !== 0 || typeof d.get !== "function") continue;
+        if (depth !== 0 || typeof d.get !== "function" || !bindingGetter(d.get)) continue;
         // A getter that reads inputs or has effects (esbuild's lazy __esm
         // inits) is left out: its member starts Node, and its work happens
         // when the program reads the member, eager or deferred alike (Node
@@ -195,21 +209,31 @@ exports.probe = function probe(input) {
   };
   const wrapGetter = (owner, key, label, onRead) => {
     const d = Object.getOwnPropertyDescriptor(owner, key);
-    if (d === undefined || !d.configurable) return;
+    if (d !== undefined && !d.configurable) return;
+    // Without an own property (a pipe's isTTY), reads go to the prototype.
+    const own = d !== undefined;
+    let shadow;
     Object.defineProperty(owner, key, {
       configurable: true,
-      enumerable: d.enumerable,
+      enumerable: own ? d.enumerable : false,
       get() {
-        const v = d.get ? d.get.call(this) : d.value;
+        const v = own
+          ? (d.get ? d.get.call(this) : d.value)
+          : shadow !== undefined ? shadow.v : Reflect.get(Object.getPrototypeOf(owner), key, this);
         if (recording && !internalCaller()) onRead(v);
         return v;
       },
       set(v) {
         note(effects, "a write of " + label);
-        if (d.set) d.set.call(this, v); else d.value = v;
+        if (!own) shadow = { v };
+        else if (d.set) d.set.call(this, v);
+        else d.value = v;
       },
     });
-    undo.push(() => Object.defineProperty(owner, key, d));
+    undo.push(() => {
+      if (own) Object.defineProperty(owner, key, d);
+      else delete owner[key];
+    });
   };
   const realEnv = process.env;
   const readKey = (t, k) => {
@@ -328,10 +352,19 @@ exports.probe = function probe(input) {
     const original = fsModule[key];
     if (typeof original !== "function") continue;
     const wrapped = function (target, flags) {
-      const result = original.apply(this, arguments);
+      let result;
+      try {
+        result = original.apply(this, arguments);
+      } catch (e) {
+        // A file that is not there has no boot guard: its absence is an input.
+        if (recording && !internalCaller()) inputs.push("fs." + key + "() (" + lastCaller + ")");
+        throw e;
+      }
       if (recording && !internalCaller()) {
         const own = ownPath(target);
-        if (own !== null && (key !== "openSync" || readOnlyFlags(flags))) {
+        if (key === "existsSync" && result === false) {
+          inputs.push("fs." + key + "() (" + lastCaller + ")");
+        } else if (own !== null && (key !== "openSync" || readOnlyFlags(flags))) {
           files.add(own);
           if (key === "openSync") guardedFds.add(result);
         } else {
@@ -430,6 +463,25 @@ exports.probe = function probe(input) {
     return [name, m];
   });
 
+  // A module's exported values right after its load, at the depth the
+  // snapshot covers (the module value's members, and theirs for objects).
+  const exportShape = (v) => {
+    const shape = [];
+    if (v === null || (typeof v !== "object" && typeof v !== "function")) return shape;
+    for (const k of Reflect.ownKeys(v)) {
+      const d = Object.getOwnPropertyDescriptor(v, k);
+      if (d === undefined || !("value" in d)) continue;
+      shape.push([v, k, d.value]);
+      const m = d.value;
+      if (m !== null && typeof m === "object")
+        for (const k2 of Reflect.ownKeys(m)) {
+          const d2 = Object.getOwnPropertyDescriptor(m, k2);
+          if (d2 !== undefined && "value" in d2) shape.push([m, k2, d2.value]);
+        }
+    }
+    return shape;
+  };
+  const shapes = new Map();
   const results = [];
   for (const path of input.modules) {
     inputs.length = volatile.length = effects.length = 0;
@@ -481,6 +533,22 @@ exports.probe = function probe(input) {
     if (threw !== undefined) { record.throws = threw; results.push(record); continue; }
     if (!("o" in root)) { record.reason = "its value is not an object"; results.push(record); continue; }
     record.root = root.o;
+    // This load changed what an earlier module exports: neither defers (the
+    // earlier snapshot no longer holds, and this load's change has to happen
+    // where the program imports it).
+    for (const [earlier, shape] of shapes) {
+      const changed = shape.some(([o, k, v]) => {
+        const d = Object.getOwnPropertyDescriptor(o, k);
+        return d === undefined || !("value" in d) || !Object.is(d.value, v);
+      });
+      if (!changed) continue;
+      delete earlier.root;
+      earlier.reason = "a later island module's load changes its exports";
+      delete record.root;
+      record.reason = "its load changes another island module's exports";
+      shapes.delete(earlier);
+    }
+    if (record.root !== undefined) shapes.set(record, exportShape(exportsValue));
     results.push(record);
   }
   for (const u of undo.reverse()) u();

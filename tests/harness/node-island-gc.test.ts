@@ -9,6 +9,9 @@
  *    under ASan) frees nothing still reachable: the run prints exactly
  *    what a run with the collector switched off prints, and never trips the
  *    bridge's use-after-collection check.
+ *  - A native object the program keeps, which crosses in a capsule only
+ *    the export table holds, keeps its representative: the island's weak
+ *    maps still find it (tests/fixtures/node-island/gc-capsule).
  * Needs a libnode pack in SCRIPTC_LIBNODE (libnode.ts). */
 import { execFile } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -95,4 +98,23 @@ describe.skipIf(skip)("Node island cross-heap cycles", () => {
     expect(on.stdout).toMatch(/^sum \d+ check \d+ watched alive (\d+) of \1\n$/);
     expect(on.stdout).toBe(off.stdout);
   }, 600_000);
+
+  test("a native object the program keeps keeps its identity in island weak maps", async () => {
+    // A typed object crosses in a capsule the export table alone holds;
+    // the program holds the object itself.
+    const dir = join(outDir, "gc-capsule");
+    mkdirSync(dir, { recursive: true });
+    const result = await compile(join(fixtures, "gc-capsule/main.ts"), {
+      outPath: join(dir, "main"),
+      outDir: dir,
+      sanitize,
+    });
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    const { stdout } = await execFileAsync(result.binaryPath, [], {
+      env: { ...process.env, XDG_CACHE_HOME: join(dir, "cache") },
+      encoding: "utf8",
+    });
+    expect(stdout).toBe("remembered\n");
+  }, 300_000);
 });
