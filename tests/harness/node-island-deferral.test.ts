@@ -30,7 +30,7 @@ async function underTerminal(binary: string, env: NodeJS.ProcessEnv): Promise<st
   child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
   const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
   expect(code).toBe(0);
-  return stdout.replace(/\^D\x08\x08/g, "");
+  return stdout.replaceAll("^D\b\b", "");
 }
 const repoRoot = join(import.meta.dirname, "../..");
 const cli = join(repoRoot, "packages/cli/dist/main.js");
