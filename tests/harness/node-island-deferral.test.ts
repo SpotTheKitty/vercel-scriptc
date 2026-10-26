@@ -5,7 +5,7 @@
  * that is a pipe at build time and a terminal when the program runs. The
  * fixtures are in tests/fixtures/node-island/deferral. Needs a libnode pack
  * in SCRIPTC_LIBNODE (libnode.ts). */
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +13,25 @@ import { describe, expect, test } from "vitest";
 import { libnodePack } from "./libnode.js";
 
 const execFileAsync = promisify(execFile);
+
+/** stdout of `binary` run under a pseudo-terminal by script(1). util-linux's
+ * takes the command with -c. The BSD one on macOS takes it after the
+ * transcript file, needs a stdin that is not a socket, and echoes the EOF
+ * it forwards from /dev/null as ^D and two backspaces. */
+async function underTerminal(binary: string, env: NodeJS.ProcessEnv): Promise<string> {
+  if (process.platform !== "darwin")
+    return (await execFileAsync("script", ["-qec", binary, "/dev/null"], { env, encoding: "utf8" }))
+      .stdout;
+  const child = spawn("script", ["-q", "/dev/null", binary], {
+    env,
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  let stdout = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+  const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
+  expect(code).toBe(0);
+  return stdout.replace(/\^D\x08\x08/g, "");
+}
 const repoRoot = join(import.meta.dirname, "../..");
 const cli = join(repoRoot, "packages/cli/dist/main.js");
 const fixtures = join(repoRoot, "tests/fixtures/node-island/deferral");
@@ -71,10 +90,7 @@ describe.skipIf(skip)("deferred Node island modules", () => {
     const { binary } = await build("tty");
     expect(await run(binary)).toBe("color false\n");
     // Under a pseudo-terminal the module sees a terminal, as under Node.
-    const { stdout } = await execFileAsync("script", ["-qec", binary, "/dev/null"], {
-      env: { ...process.env, XDG_CACHE_HOME: join(outDir, "cache") },
-      encoding: "utf8",
-    });
-    expect(stdout.replace(/\r/g, "")).toBe("color true\n");
+    const env = { ...process.env, XDG_CACHE_HOME: join(outDir, "cache") };
+    expect((await underTerminal(binary, env)).replace(/\r/g, "")).toBe("color true\n");
   }, 300_000);
 });
