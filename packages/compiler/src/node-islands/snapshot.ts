@@ -7,16 +7,20 @@
  * decides each one:
  *
  *   - the package's `evaluate` setting (`scriptc.packages.<name>`):
- *     "eager" keeps the module eager; "lazy" defers it whatever its load
- *     does (the user judged the effects benign);
+ *     "eager" keeps the module eager; "lazy" defers it whatever else its
+ *     load does (the user judged the effects benign);
+ *   - environment reads: the boot guards record the build-time value of
+ *     every environment variable the load read, so a load that read one
+ *     not listed in `scriptc.nodeIslands.publicEnv` stays eager, "lazy"
+ *     included, and no value of it reaches the executable;
  *   - the probe: one run of the build-time probe host
  *     (runtime src/tools/scr_node_island_probe.c) in a libnode environment
  *     from the same pack, which loads every candidate module under the
  *     load recorder (probe-recorder.ts) and takes the interface snapshot of
  *     each module's value. "auto" (the default) defers a module whose
  *     recorded load threw nothing, had no effects and read no run-time
- *     input other than env keys and stdio TTY state, which become boot
- *     guards (the determinism argument in probe-recorder.ts). The static
+ *     input other than public env keys and stdio TTY state, which become
+ *     boot guards (the determinism argument in probe-recorder.ts). The static
  *     effect gate (effect-gate.ts) is reported alongside, as the tier that
  *     needs no recording;
  *   - per-module mode (NI-7b): when every static island import defers,
@@ -132,6 +136,7 @@ export function finalizeDeferredIslands(
   mod: IrModule,
   entryPath: string,
   packDir: string | null,
+  probeModules: (packDir: string, modules: string[]) => ProbeOutput | string = runProbe,
 ): DeferralDecision[] {
   const calls = deferCalls(mod);
   if (calls.length === 0) return [];
@@ -148,6 +153,7 @@ export function finalizeDeferredIslands(
     return decisions;
   }
   const config = readProjectConfig(entryPath);
+  const publicEnv = new Set(config.nodeIslands.publicEnv);
   const candidates: { call: DeferCall; path: string; lazy: boolean; gate: string }[] = [];
   for (const call of calls) {
     const path = fileOf(mod, pathOf(call));
@@ -167,7 +173,7 @@ export function finalizeDeferredIslands(
   }
   let allDeferred = candidates.length === calls.length;
   if (candidates.length === 0) return decisions;
-  const probe = runProbe(packDir, [...new Set(candidates.map((c) => c.path))]);
+  const probe = probeModules(packDir, [...new Set(candidates.map((c) => c.path))]);
   if (typeof probe === "string") {
     for (const c of candidates) decide(c.call, false, probe);
     return decisions;
@@ -190,6 +196,9 @@ export function finalizeDeferredIslands(
         snapshotNames(probe, result.root, tree.root)
       )
         return "its exports hold a path of the build machine";
+      const privateEnv = result.env.map(([k]) => k).filter((k) => !publicEnv.has(k));
+      if (privateEnv.length > 0)
+        return `its load reads the environment variable${privateEnv.length === 1 ? "" : "s"} ${privateEnv.join(", ")}, whose build-time values its boot guards would record (scriptc.nodeIslands.publicEnv lists the ones that may be recorded)`;
       if (c.lazy) return null;
       if (result.effects.length > 0) return `its load has effects: ${result.effects.join(", ")}`;
       if (result.inputs.length > 0) return `its load reads ${result.inputs.join(", ")}`;
@@ -294,7 +303,7 @@ function fileGuardLines(files: string[]): string[] {
   return lines;
 }
 
-type ProbeValue =
+export type ProbeValue =
   | { o: number }
   | { u: 1 }
   | { l: 1 }
@@ -303,13 +312,13 @@ type ProbeValue =
   | { s: string }
   | { x: 1 };
 
-interface ProbeObject {
+export interface ProbeObject {
   f: number;
   p: boolean;
   m: [string, ProbeValue][];
 }
 
-interface ProbeResult {
+export interface ProbeResult {
   path: string;
   root?: number;
   inputs: string[];
@@ -323,7 +332,7 @@ interface ProbeResult {
   reason?: string;
 }
 
-interface ProbeOutput {
+export interface ProbeOutput {
   results: ProbeResult[];
   objects: Record<string, ProbeObject>;
 }

@@ -12,6 +12,8 @@
  *  - A native object the program keeps, which crosses in a capsule only
  *    the export table holds, keeps its representative: the island's weak
  *    maps still find it (tests/fixtures/node-island/gc-capsule).
+ *  - Exports the island keeps for the whole run schedule no major GCs of
+ *    their own once a GC found them live (tests/fixtures/node-island/gc-held.mjs).
  * Needs a libnode pack in SCRIPTC_LIBNODE (libnode.ts). */
 import { execFile } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -98,6 +100,32 @@ describe.skipIf(skip)("Node island cross-heap cycles", () => {
     expect(on.stdout).toMatch(/^sum \d+ check \d+ watched alive (\d+) of \1\n$/);
     expect(on.stdout).toBe(off.stdout);
   }, 600_000);
+
+  test("exports the island keeps do not schedule major GCs of their own", async () => {
+    // 200k long-lived representatives. Each export adds to the external
+    // memory V8 schedules major GCs by, until a GC finds that the exports
+    // made since the previous one were not garbage.
+    const dir = join(outDir, "gc-held");
+    mkdirSync(dir, { recursive: true });
+    const result = await compile(join(fixtures, "gc-held.mjs"), {
+      outPath: join(dir, "gc-held"),
+      outDir: dir,
+      sanitize,
+    });
+    if (!result.ok)
+      throw new Error(result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"));
+    const n = 200_000;
+    const { stdout, stderr } = await execFileAsync(result.binaryPath, [String(n)], {
+      cwd: fixtures,
+      env: { ...process.env, SCRIPTC_NODE_ISLANDS_TRACE: "gc" },
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    expect(stdout).toBe(`kept ${n} sum ${(n * (n - 1)) / 2}\n`);
+    const major = Number(/\[node-islands\] gc totals: major (\d+)/.exec(stderr)?.[1]);
+    expect(major).toBeGreaterThan(0);
+    expect(major).toBeLessThanOrEqual(3);
+  }, 300_000);
 
   test("a native object the program keeps keeps its identity in island weak maps", async () => {
     // A typed object crosses in a capsule the export table alone holds;

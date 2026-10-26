@@ -988,10 +988,18 @@ v8::CppHeap *g_cpp_heap = nullptr;
 // representative (the native value, its closure or record and what they
 // hold); reported lazily, never from inside a GC.
 constexpr int64_t kExportExternalBytes = 2048;
+// The estimate follows what major GCs find. A major GC that frees fewer
+// exports than an eighth of those made since the previous one drops it to
+// kExportExternalFloor: long-lived exports would otherwise schedule a major
+// GC per 32k of them, each walking every handle. One that frees more
+// restores it.
+constexpr int64_t kExportExternalFloor = 64;
+int64_t g_export_external_bytes = kExportExternalBytes;
+uint64_t g_cycle_new_exports = 0; // exports made since the last major GC
 int64_t g_external_reported = 0;
 
 void ReportExternal(Isolate *isolate) {
-  int64_t want = static_cast<int64_t>(g_export_gc.size()) * kExportExternalBytes;
+  int64_t want = static_cast<int64_t>(g_export_gc.size()) * g_export_external_bytes;
   if (want == g_external_reported) return;
   isolate->AdjustAmountOfExternalAllocatedMemory(want - g_external_reported);
   g_external_reported = want;
@@ -1836,6 +1844,7 @@ void AttachReach(Isolate *isolate, Local<Context> context, uint32_t id, Local<Ob
     x->rep.Reset(isolate, rep);
     x->gen = gen;
   }
+  g_cycle_new_exports++;
   NoteFresh(id | SCR_NODE_GC_EXPORT);
   ReportExternal(isolate);
 }
@@ -1972,6 +1981,11 @@ void OnGcEpilogue(Isolate *isolate, v8::GCType, v8::GCCallbackFlags, void *) {
   }
   g_gc_stats.major_gcs++;
   g_gc_stats.freed_imports += freed_imports;
+  if (g_cycle_new_exports >= 1024)
+    g_export_external_bytes = g_cycle_freed_exports * 8 < g_cycle_new_exports
+                                  ? kExportExternalFloor
+                                  : kExportExternalBytes;
+  g_cycle_new_exports = 0;
   if (g_gc_trace) {
     std::fflush(stdout);
     if (g_gc_cycle.analyzed)
