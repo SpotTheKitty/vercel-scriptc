@@ -36,6 +36,21 @@ export const ADOPTED_OPTIONS = [
   "reactNamespace",
 ] as const;
 
+/* ── The early-error boundary (read this before relaxing a code) ────────
+ *
+ * Some of the codes below do double duty: TypeScript reports them for a
+ * JavaScript construct that ECMAScript ALSO makes a SyntaxError (a
+ * redeclared block binding, a declaration in a statement-only position).
+ * Relaxing such a code removes that construct's only rejection, so a
+ * parse-negative program would start compiling and running.
+ *
+ * frontend/early-errors.ts owns those rejections now, under their own
+ * preflight codes — SC0005 (duplicate lexical declaration in a block or
+ * switch statement list), SC0006 (lexical declaration colliding with a
+ * `var` in the same block), SC0007 (declaration in a single-statement
+ * position). A relaxation that needs one of those rules to keep firing must
+ * land with the matching rule in that pass, not rely on this table. */
+
 export const JS_RELAXED_TSC_CODES: ReadonlySet<number> = new Set([
   // implicit any (params, variables, elements, this, returns, rest,
   // construct signatures, index reads over shapes with no index
