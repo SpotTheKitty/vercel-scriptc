@@ -56,6 +56,7 @@ import { typeKey } from "../../type-mapper.js";
 import {
   lowerArrayCallback,
   requireProducedArrayElement,
+  unitOnlyArrayElement,
   callbackArrayElement,
   truthyFilterCallback,
 } from "./callback-arguments.js";
@@ -108,7 +109,14 @@ export function lowerArrayHofCall(
   }
   const callback = booleanFilter
     ? { fnArg: truthyFilterCallback(lowerer, valueT, loc), arity: 1, unread: false }
-    : lowerArrayCallback(lowerer, argNode, [valueT], arrayOf(elem));
+    : lowerArrayCallback(
+        lowerer,
+        argNode,
+        [valueT],
+        arrayOf(elem),
+        false,
+        method === "map" ? (unitOnlyArrayElement(lowerer, call) ?? undefined) : undefined,
+      );
   const { fnArg, arity } = callback;
   // Only an array that can hold elements outside its element type needs to
   // leave an element its callback ignores unread.
@@ -659,7 +667,14 @@ export function lowerArrayUnionHofCall(
       ? valueArms[0]!
       : { kind: "union", unionId: lowerer.unions.intern(valueArms) };
   const argNode = call.arguments.nodes[0]!;
-  const { fnArg, arity } = lowerArrayCallback(lowerer, argNode, [valueT], receiverT);
+  const { fnArg, arity } = lowerArrayCallback(
+    lowerer,
+    argNode,
+    [valueT],
+    receiverT,
+    false,
+    method === "map" ? (unitOnlyArrayElement(lowerer, call) ?? undefined) : undefined,
+  );
   const fnRet = fnArg.type.ret;
   if (method === "map" && fnRet.kind === "void") {
     // `void[]` has no element (see the plain-receiver map path).
