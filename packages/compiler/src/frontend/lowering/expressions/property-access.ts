@@ -3545,9 +3545,21 @@ export function lowerUnionProperty(
   expr: ts.PropertyAccessExpression,
 ): IrExpr | null {
   if (lowerer.chainBlocked(expr)) return null;
-  const receiverIr =
+  const spelled =
     structuralReadType(lowerer, expr.expression) ??
     lowerer.mapTypeOf(lowerer.typeOf(expr.expression));
+  // Inside an optional-chain body the guarded receiver is checker-typed by
+  // its non-nullish narrowing — often one record of a discriminated union
+  // — while the bound chain value still carries the whole present union
+  // (`stored?.type` after an earlier `stored?.type === "oauth"` return
+  // narrowed `stored` to `ApiKeyCredential`, though the runtime-optional
+  // storage still holds `ApiKeyCredential | OAuthCredential`). The union
+  // reader dispatches on the runtime tag, so take the union the chain
+  // binding hands to `lowerExpr` below instead of the spelled narrowing.
+  const chainRecv = lowerer.chainRecvByNode.get(expr.expression);
+  const chainUnion =
+    spelled?.kind !== "union" && chainRecv?.type.kind === "union" ? chainRecv.type : null;
+  const receiverIr = chainUnion ?? spelled;
   // The checker can rule the receiver UNREACHABLE and the assertion that
   // escapes it (`const x: never = event; (event as any).type` — the
   // `default:` branch of a switch that exhausts every arm) erases to
@@ -3580,6 +3592,16 @@ export function lowerUnionProperty(
     // `Base | undefined`) that `instanceof` narrowed to several subclasses:
     // extract the instance and test its class, as typed slots do.
     else value = narrowStoredClassValue(lowerer, value, receiverIr) ?? value;
+  }
+  // The spelled type is a narrowing, so every path below (dyn, record,
+  // object, array) was unreachable for this read before it took the stored
+  // union: answer it only when the union reader can, and otherwise hand the
+  // read back to the lowering the spelled type used to reach. A stored arm
+  // the checker ruled out that has no such member (`m1?.name` where the
+  // stored union still carries a `string` arm) must not turn an accepted
+  // program into a refusal.
+  if (chainUnion !== null) {
+    return value.type.kind === "union" ? lowerUnionValueRead(lowerer, expr, value) : null;
   }
   // A checker-union receiver whose VALUE lowered to a plain RECORD (the
   // merged-signature fiction — `runner(cmd, args)` where runner joined
