@@ -75,8 +75,24 @@ describe.skipIf(skip)("deferred Node island modules", () => {
     expect(await run(binary)).toBe("set by pkg-b true\n");
   }, 300_000);
 
+  test("a load that changes an object exported through a getter defers neither", async () => {
+    const { binary, trace } = await build("mutate-getter");
+    expect(trace.some((l) => /eager .*pkg-a.*a later island module's load changes/.test(l))).toBe(
+      true,
+    );
+    expect(
+      trace.some((l) => /eager .*pkg-b.*changes another island module's exports/.test(l)),
+    ).toBe(true);
+    expect(await run(binary)).toBe("set by pkg-b true\n");
+  }, 300_000);
+
   test("an export getter that runs code runs on every read", async () => {
     const { binary } = await build("getter");
+    expect(await run(binary)).toBe("counter 1 2\n");
+  }, 300_000);
+
+  test("an export getter that reads a member runs on every read", async () => {
+    const { binary } = await build("getter-member");
     expect(await run(binary)).toBe("counter 1 2\n");
   }, 300_000);
 

@@ -80,9 +80,11 @@ function internalCaller() {
 const fnToString = Function.prototype.toString;
 const hasOwn = Object.prototype.hasOwnProperty;
 // A getter that only reads a binding (esbuild's and tsc's export getters):
-// reading it again reads the same binding. Any other getter can run code
-// on every read, so its member is not snapshotted.
-const BINDING_GETTER = /^(?:\(\)\s*=>\s*[\w$.]+|function\s*[\w$]*\s*\(\)\s*\{\s*return\s+[\w$.]+(?:\[[\w$]+\])?\s*;?\s*\}|get\s+[\w$]+\s*\(\)\s*\{\s*return\s+[\w$.]+\s*;?\s*\})$/;
+// reading it again reads the same binding. A member read ('a.b', 'a[b]')
+// can invoke another accessor that runs code on every read, so only a bare
+// identifier qualifies. Any other getter can also run code on every read,
+// so its member is not snapshotted.
+const BINDING_GETTER = /^(?:\(\)\s*=>\s*[A-Za-z_$][\w$]*|function\s*[\w$]*\s*\(\)\s*\{\s*return\s+[A-Za-z_$][\w$]*\s*;?\s*\}|get\s+[\w$]+\s*\(\)\s*\{\s*return\s+[A-Za-z_$][\w$]*\s*;?\s*\})$/;
 function bindingGetter(fn) {
   let source = "";
   try { source = fnToString.call(fn); } catch { return false; }
@@ -463,20 +465,31 @@ exports.probe = function probe(input) {
     return [name, m];
   });
 
+  // What a member of a module value reads now: a data property's value, or
+  // a binding getter's (esbuild's and tsc's export getters). Any other
+  // accessor can run code, so it is not part of a shape.
+  const MISSING = {};
+  const memberValue = (o, k) => {
+    const d = Object.getOwnPropertyDescriptor(o, k);
+    if (d === undefined) return MISSING;
+    if ("value" in d) return d.value;
+    if (typeof d.get !== "function" || !bindingGetter(d.get)) return MISSING;
+    try { return d.get.call(o); } catch { return MISSING; }
+  };
+
   // A module's exported values right after its load, at the depth the
   // snapshot covers (the module value's members, and theirs for objects).
   const exportShape = (v) => {
     const shape = [];
     if (v === null || (typeof v !== "object" && typeof v !== "function")) return shape;
     for (const k of Reflect.ownKeys(v)) {
-      const d = Object.getOwnPropertyDescriptor(v, k);
-      if (d === undefined || !("value" in d)) continue;
-      shape.push([v, k, d.value]);
-      const m = d.value;
+      const m = memberValue(v, k);
+      if (m === MISSING) continue;
+      shape.push([v, k, m]);
       if (m !== null && typeof m === "object")
         for (const k2 of Reflect.ownKeys(m)) {
-          const d2 = Object.getOwnPropertyDescriptor(m, k2);
-          if (d2 !== undefined && "value" in d2) shape.push([m, k2, d2.value]);
+          const m2 = memberValue(m, k2);
+          if (m2 !== MISSING) shape.push([m, k2, m2]);
         }
     }
     return shape;
@@ -537,10 +550,7 @@ exports.probe = function probe(input) {
     // earlier snapshot no longer holds, and this load's change has to happen
     // where the program imports it).
     for (const [earlier, shape] of shapes) {
-      const changed = shape.some(([o, k, v]) => {
-        const d = Object.getOwnPropertyDescriptor(o, k);
-        return d === undefined || !("value" in d) || !Object.is(d.value, v);
-      });
+      const changed = shape.some(([o, k, v]) => !Object.is(memberValue(o, k), v));
       if (!changed) continue;
       delete earlier.root;
       earlier.reason = "a later island module's load changes its exports";
