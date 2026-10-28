@@ -13894,6 +13894,19 @@ export class Lowerer {
     );
   }
 
+  /** Whether `node`'s TS type is a `Promise<never>` (the throw-only async
+   * function's declared result): the promise can never settle, so the value
+   * it would resolve to is unreachable. The IR keeps `Promise<never>` as a
+   * promise with a void payload, exactly like `Promise<void>`, so the TS
+   * payload type is what separates the two. */
+  private promisePayloadIsNever(node: ts.Expression): boolean {
+    const t = this.typeOf(node);
+    if ((t.flags & ts.TypeFlags.Object) === 0) return false;
+    if (((t as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) === 0) return false;
+    const args = this.checker.getTypeArguments(t as ts.TypeReference);
+    return args.length === 1 && (args[0]!.flags & ts.TypeFlags.Never) !== 0;
+  }
+
   /** The value of `return <e>` (already lowered untyped) in an async or
    * void context: a promise flattens through the returned-promise await,
    * everything else converts into the declared result. */
@@ -13901,6 +13914,15 @@ export class Lowerer {
     if (expected.kind === "void" && e.kind === "unitLit") return null;
     if (this.ctx.isAsync && e.type.kind === "promise" && expected.kind !== "promise") {
       const awaited = this.returnedPromiseAwait(e);
+      // A `Promise<never>` never settles, so the awaited value is
+      // unreachable: it fills any result shape instead of failing the
+      // void-to-record conversion.
+      if (
+        expected.kind !== "void" &&
+        e.type.inner.kind === "void" &&
+        this.promisePayloadIsNever(node)
+      )
+        return this.divergentValue(awaited, expected);
       return this.coerceInto(node, awaited, expected);
     }
     return this.coerceInto(node, e, expected);
