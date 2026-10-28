@@ -4315,6 +4315,34 @@ function checkedDynamicValue(expr: IrExpr): IrExpr | null {
   return expr.kind === "dynCheck" && expr.value.type.kind === "dyn" ? expr.value : null;
 }
 
+/** A GENERIC receiver type: a type parameter, or a narrowing of one that
+ * intersects it (`"k" in options` refines a type variable to
+ * `T & Record<"k", unknown>`). Its stored layout is whatever the call site
+ * instantiated it with, and the CONSTRAINT's members are not necessarily
+ * stored there. */
+function typeParameterReceiver(t: ts.Type): boolean {
+  try {
+    if ((t.flags & ts.TypeFlags.TypeParameter) !== 0) return true;
+    return (
+      (t.flags & ts.TypeFlags.Intersection) !== 0 &&
+      ts.constituentTypes(t).some((part) => (part.flags & ts.TypeFlags.TypeParameter) !== 0)
+    );
+  } catch (e) {
+    if (ts.isUnreadableConstituentsPanic(e)) return false;
+    throw e;
+  }
+}
+
+/** Whether `access` is only READ (not the target of an assignment, a
+ * delete, or an increment). */
+function readOnlyAccess(access: ts.PropertyAccessExpression): boolean {
+  const parent = access.parent;
+  if (parent === undefined) return true;
+  if (ts.isBinaryExpression(parent) && parent.left === access) return false;
+  if (ts.isDeleteExpression(parent)) return false;
+  return !ts.isPrefixUnaryExpression(parent) && !ts.isPostfixUnaryExpression(parent);
+}
+
 export function fieldTarget(
   lowerer: Lowerer,
   access: ts.PropertyAccessExpression,
@@ -4440,6 +4468,55 @@ export function fieldTarget(
       access.name.text,
       lowerer.lowerExpr(access.expression),
     );
+  }
+  // A generic receiver's member the INSTANTIATION cannot store: the type
+  // parameter's constraint declares the member (so tsc admits the read),
+  // while the record the parameter was instantiated with has no such slot —
+  // a generic options bag read through its constraint (`options.sessionId`
+  // under an `"sessionId" in options` guard) at a call site whose options
+  // literal omits the optional member. Node reads the property off the
+  // object it actually has: undefined when the caller omitted it, the extra
+  // property when a JavaScript caller supplied one. So the read is the
+  // checked-dynamic keyed read of the stored record, entering the static
+  // code at the type the checker gave the read.
+  if (
+    !access.questionDotToken &&
+    readOnlyAccess(access) &&
+    typeParameterReceiver(lowerer.typeOf(access.expression))
+  ) {
+    const storedIr = stored ?? narrowed;
+    const arm = storedIr?.kind === "union" ? lowerer.stripUndefinedArm(storedIr) : storedIr;
+    const shape = arm?.kind === "record" ? lowerer.shapes.get(arm.shapeId) : undefined;
+    const admitted = lowerer.mapTypeOf(lowerer.typeOf(access));
+    if (
+      shape &&
+      !shape.tuple &&
+      !shape.indexValue &&
+      !shape.fields.some((f) => f.name === access.name.text) &&
+      admitted &&
+      admitted.kind !== "void"
+    ) {
+      let obj = lowerer.lowerExpr(access.expression);
+      if (obj.type.kind === "union" && lowerer.armTag(obj.type.unionId, UNDEFINED_T) >= 0) {
+        const present = lowerer.stripUndefinedArm(obj.type);
+        obj =
+          present.kind === "record"
+            ? (lowerer.runtimeOptionalPropertyReceiver(
+                access.expression,
+                obj,
+                present,
+                access.name.text,
+              ) ?? obj)
+            : lowerer.maybeNarrow(obj, access.expression);
+      }
+      if (obj.type.kind !== "record") return null;
+      return {
+        container: "dynamic",
+        obj: lowerer.coerceToExpected(obj, DYN),
+        field: access.name.text,
+        fieldType: admitted,
+      };
+    }
   }
   if (receiverIr?.kind === "record") {
     const shape = lowerer.shapes.get(receiverIr.shapeId);
