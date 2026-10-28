@@ -129,7 +129,13 @@ export function omittableTrailingParam(lowerer: Lowerer, type: IrType): boolean 
  * parameters are ignored. A source with MORE parameters than the slot is
  * clean when every extra trailing one is omittable — the adapter passes
  * that absent value explicitly (funcCoerceAdapter's omittedParams), the
- * same way a call through the slot would. */
+ * same way a call through the slot would. A parameter the slot coercion
+ * converts through a STRUCTURAL width counts (cleanParamPair), which
+ * recurses through a nested function type: a callback parameter of the
+ * value taking a narrower record where the slot's takes its `unknown` view
+ * converts the argument the same way a top-level call does. The result side
+ * likewise accepts what funcCoerceAdapter converts (cleanResult), including
+ * a promise whose payload widens. */
 export function cleanFuncAdaptable(
   lowerer: Lowerer,
   src: IrType & { kind: "func" },
@@ -137,15 +143,35 @@ export function cleanFuncAdaptable(
 ): boolean {
   if (restPackingAdapterFits(lowerer, src, dst)) return true;
   if (src.rest === true || dst.rest === true) return false;
-  for (let i = dst.params.length; i < src.params.length; i++) {
-    if (!omittableTrailingParam(lowerer, src.params[i]!)) return false;
+  // Recursive function types (`type Handler = (h: Handler) => void`) reach
+  // the same pair again one parameter down: assume it converts, the same
+  // coinductive answer recordWidthPlan gives its own back-edges.
+  const key = `funcClean:${typeKey(src)}:${typeKey(dst)}`;
+  if (lowerer.coercions.planning.has(key)) return true;
+  lowerer.coercions.planning.add(key);
+  try {
+    for (let i = dst.params.length; i < src.params.length; i++) {
+      if (!omittableTrailingParam(lowerer, src.params[i]!)) return false;
+    }
+    for (let i = 0; i < src.params.length && i < dst.params.length; i++) {
+      if (!cleanParamPair(lowerer, dst.params[i]!, src.params[i]!)) return false;
+    }
+    return cleanResult(lowerer, src.ret, dst.ret);
+  } finally {
+    lowerer.coercions.planning.delete(key);
   }
-  for (let i = 0; i < src.params.length && i < dst.params.length; i++) {
-    if (!lowerer.coercibleValue(dst.params[i]!, src.params[i]!)) return false;
-  }
-  if (dst.ret.kind === "void") return true;
-  if (lowerer.coercibleValue(src.ret, dst.ret)) return true;
-  return src.ret.kind === "void" && dst.ret.kind === "dyn";
+}
+
+/** Whether the slot's coercion converts the value's RESULT without a
+ * trap-only path: the dispositions funcCoerceAdapter's result side accepts
+ * (a void slot drops the value; coercibleValue; a structural width, which
+ * includes the promise payload widening and a nested function adaptation;
+ * the void-into-unknown drop). */
+function cleanResult(lowerer: Lowerer, actual: IrType, expected: IrType): boolean {
+  if (expected.kind === "void") return true;
+  if (lowerer.coercibleValue(actual, expected)) return true;
+  if (actual.kind === "void" && expected.kind === "dyn") return true;
+  return lowerer.widthLiftPlan(actual, expected) !== null;
 }
 
 /** Whether the slot's argument type `actual` converts into the function's
