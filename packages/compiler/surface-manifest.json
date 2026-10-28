@@ -171,6 +171,14 @@
       "code": "SC1090"
     },
     {
+      "id": "diagnostic.sc1091",
+      "kind": "diagnostic-fence",
+      "name": "writing an undeclared name in a JavaScript source",
+      "status": "unsupported",
+      "code": "SC1091",
+      "note": "a write to an undeclared name has no native lowering: sloppy mode makes it a property on Node's global object, which a native binary has none of, and strict mode makes it throw; declare the name, or keep the module in a Node island (sloppy-mode programs route there)"
+    },
+    {
       "id": "diagnostic.sc1100",
       "kind": "diagnostic-fence",
       "name": "operations on 'unknown' values",

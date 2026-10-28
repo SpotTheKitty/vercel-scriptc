@@ -357,6 +357,7 @@ import {
   overridesDtsPath,
   npmStaticDepSf7,
   requireSpecOf,
+  isJsWriteTarget7,
   resolveImport,
   workspacePackageOfPath,
   type CycleEdge,
@@ -15512,6 +15513,18 @@ export class Lowerer {
     node: ts.Node,
     fallback: string,
   ): never {
+    // A `.js` WRITE to a name nothing declares. Sloppy mode resolves it by
+    // creating a property on the global object — process-wide state a native
+    // binary has no object for, so those programs run in a Node island
+    // (plan D-5). Until the write is routed there it is refused by name
+    // rather than by the generic no-lowering text.
+    if (symbol === null && isJsWriteTarget7(node) && isJsSourceFile(ts.getSourceFileOfNode(node))) {
+      this.unsupported(
+        "SC1091",
+        node,
+        `writing the undeclared name '${name}' in a JavaScript source`,
+      );
+    }
     if (this.isBlockedBinding(symbol)) {
       this.pushDiag(blockedBindingUseDiag(name, locOf(node)));
       throw new PoisonError();

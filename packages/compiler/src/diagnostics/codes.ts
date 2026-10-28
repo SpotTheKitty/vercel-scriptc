@@ -43,6 +43,7 @@ export const DIAGNOSTIC_CODES = {
   SC1071: "generators",
   SC1080: "'this' outside a class method",
   SC1090: "this syntax (generic construct fence)",
+  SC1091: "write to an undeclared name in a JavaScript source",
   SC1100: "operations on 'unknown' values",
   SC1101: "converting typed values to 'unknown'",
   SC1110: "comptime evaluation failure",

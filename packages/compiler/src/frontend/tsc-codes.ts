@@ -175,6 +175,20 @@ export const JS_RELAXED_TSC_CODES: ReadonlySet<number> = new Set([
   // ride the checked-dynamic tree; unsupported operations report a compile-time diagnostic).
   18046,
   2571,
+  // UNDECLARED NAMES in a JavaScript source: Node resolves them at run time,
+  // never at compile time — a READ throws the catchable
+  // `ReferenceError: <name> is not defined` at the access (`typeof` of one
+  // answers "undefined"), and a sloppy-mode WRITE creates a global. The
+  // lowerer turns the read into `scr_undef_global_read` (exact Node text and
+  // behavior) and refuses the write with SC1091, which names the Node-island
+  // route the sloppy semantics need (the plan's D-2/D-5). TypeScript input
+  // keeps the compile error: an undeclared name there is a bug, not a
+  // runtime path. 2552 is 2304's did-you-mean spelling, and 18004 is the
+  // same unresolved name in SHORTHAND position (`{ x }`), which the checker
+  // reports against the property instead of the reference.
+  2304,
+  2552,
+  18004,
 ]);
 
 /* Arithmetic on an `any` operand (TS2362/2363/2365 fire when the other
