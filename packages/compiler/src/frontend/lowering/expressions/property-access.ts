@@ -1617,6 +1617,19 @@ export function lowerPropertyAccessExpr(
   }
   const asserted = assertedMemberRead(lowerer, expr.expression, expr.name.text, recvLowered, loc);
   if (asserted) return asserted;
+  // Lowering erases flow narrowing, so a checker-NARROWED receiver keeps
+  // the wider union it stores (`stored?.type` after the earlier arm
+  // returned, `(entry as { role: string }).role`): the checker's type
+  // names one record while the value still carries its siblings. Read the
+  // member off whichever arm the value holds — an arm that does not
+  // declare it answers undefined, exactly Node's get — and narrow the
+  // answer to the checker's type, which traps on an arm the checker's
+  // narrowing ruled out (types do not lie). Reaching this point means no
+  // lowering above claimed the read, so only refusals gain a lowering.
+  if (recvLowered.type.kind === "union") {
+    const read = lowerUnionValueRead(lowerer, expr, recvLowered, true);
+    if (read) return lowerer.maybeNarrow(read, expr);
+  }
   // A checker-`any` receiver whose value is a FRESH typed result of an
   // earlier step in the chain (`out.split(" ").length`, where split
   // extracted the string and answered a native string[]): the member read
@@ -3642,8 +3655,33 @@ export function lowerUnionProperty(
       "shared property access without a represented union receiver",
     );
   }
-  const def = lowerer.unions.get(value.type.unionId);
-  if (!def) throw new InternalCompilerError(`lowerer bug: unknown union ${value.type.unionId}`);
+  const read = lowerUnionValueRead(lowerer, expr, value);
+  if (read) return read;
+  lowerer.unsupported(
+    "SC1090",
+    expr,
+    `reading '${expr.name.text}' on a union-typed value (every arm must be an object/record ` +
+      `with a same-typed field '${expr.name.text}'; ` +
+      `${NARROW_FIRST})`,
+  );
+}
+
+/** The member read itself on a lowered UNION value: `lowerUnionProperty`
+ * after it has produced the value (retagged to the checker's union when
+ * the checker removed arms) and the dispatcher's narrowed-receiver
+ * fallback, which reaches the same read with the value a checker-narrowed
+ * receiver still stores. Returns null when no arm can answer — the caller
+ * owns the diagnostic. */
+export function lowerUnionValueRead(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+  value: IrExpr,
+  missingFieldAsUndefined = false,
+): IrExpr | null {
+  if (value.type.kind !== "union") return null;
+  const unionId = value.type.unionId;
+  const def = lowerer.unions.get(unionId);
+  if (!def) throw new InternalCompilerError(`lowerer bug: unknown union ${unionId}`);
   const field = expr.name.text;
   if (field === "length") {
     const presentArms = def.arms.filter((arm) => !isUnitType(arm));
@@ -3675,6 +3713,42 @@ export function lowerUnionProperty(
             };
       }
     }
+    // A union of arrays and strings (`Model[] | ModelRef[]`,
+    // `string[] | Buffer[]`): every arm answers its own length, so the
+    // read dispatches on the tag. Node's `.length` is a number for both,
+    // and no arm can be absent here (a unit arm would have to throw on
+    // this read, which the checker's narrowing already excludes).
+    if (
+      def.arms.length > 1 &&
+      def.arms.every((arm) => arm.kind === "array" || arm.kind === "string")
+    ) {
+      return perArmUnionRead(
+        lowerer,
+        expr,
+        unionId,
+        value,
+        F64,
+        "%unionLength",
+        (arm, _tag, receiver) =>
+          arm.kind === "string"
+            ? {
+                kind: "strIntrinsic",
+                method: "length",
+                receiver,
+                args: [],
+                type: F64,
+                loc: locOf(expr),
+              }
+            : {
+                kind: "arrIntrinsic",
+                method: "length",
+                receiver,
+                args: [],
+                type: F64,
+                loc: locOf(expr),
+              },
+      );
+    }
   }
   const nonUnitArms = def.arms.filter((arm) => !isUnitType(arm));
   if (nonUnitArms.length === 1 && nonUnitArms[0]?.kind === "object") {
@@ -3688,11 +3762,7 @@ export function lowerUnionProperty(
         field,
       );
       if (receiver === null) {
-        const helper = lowerer.narrowedArmHelper(
-          value.type.unionId,
-          objectType,
-          locOf(expr.expression),
-        );
+        const helper = lowerer.narrowedArmHelper(unionId, objectType, locOf(expr.expression));
         if (helper !== null)
           receiver = lowerer.checkedNarrowCall(helper, value, objectType, locOf(expr.expression));
       }
@@ -3708,6 +3778,14 @@ export function lowerUnionProperty(
       }
     }
   }
+  // A member the arms answer through an ACCESSOR (a getter inherited
+  // from a shared base class — `renderer.hasOverlayEntries` on
+  // `FullscreenRenderer | RegularRenderer`): there is no field slot
+  // `unionDisc` could read, so dispatch on the tag and call each arm's
+  // own getter. Fires only when some arm's answer is an accessor, so
+  // data-field unions keep their `unionDisc` lowering.
+  const accessorRead = lowerUnionAccessorRead(lowerer, expr, unionId, value);
+  if (accessorRead) return accessorRead;
   let common: IrType | null = null;
   for (const arm of def.arms) {
     let ft: IrType | undefined;
@@ -3736,7 +3814,15 @@ export function lowerUnionProperty(
   // arms): the JOIN path — `env.PORTLESS_PORT` on `ProcessEnv |
   // Record<string, string>`, the tail read of `loaded?.config.script`.
   const key: IrExpr = { kind: "strLit", value: field, type: STRING, loc: locOf(expr.name) };
-  const keyed = lowerUnionKeyedRead(lowerer, expr, value.type.unionId, value, key, field);
+  const keyed = lowerUnionKeyedRead(
+    lowerer,
+    expr,
+    unionId,
+    value,
+    key,
+    field,
+    missingFieldAsUndefined,
+  );
   if (keyed) return keyed;
   // Class arms declaring the field with compatible but different types
   // (`T | undefined` beside `T`): per-arm slot reads widened to one type.
@@ -3763,12 +3849,178 @@ export function lowerUnionProperty(
     const member = lowerIndexedUnionMember(lowerer, value, indexedArms, field, locOf(expr));
     if (member) return member;
   }
-  lowerer.unsupported(
-    "SC1090",
+  return null;
+}
+
+/** Evaluate `value` once into a hidden local and answer the read by
+ * dispatching on the union's tag: arm `tag` (narrowed from the local)
+ * answers `answer(arm, tag, narrowed)`. The first non-unit arm's answer
+ * is the fallback branch, which a representable union never reaches. */
+function perArmUnionRead(
+  lowerer: Lowerer,
+  expr: ts.Node,
+  unionId: string,
+  value: IrExpr,
+  type: IrType,
+  name: string,
+  answer: (arm: IrType, tag: number, receiver: IrExpr) => IrExpr,
+): IrExpr {
+  const loc = locOf(expr);
+  const def = lowerer.unions.get(unionId);
+  if (!def) throw new InternalCompilerError(`lowerer bug: unknown union ${unionId}`);
+  const stable = lowerer.declareHiddenLocal(name, value.type);
+  const ref = (): IrExpr => ({ kind: "varRef", localId: stable.id, type: value.type, loc });
+  let result: IrExpr | null = null;
+  def.arms.forEach((arm, tag) => {
+    if (isUnitType(arm)) return;
+    const receiver: IrExpr = { kind: "unionNarrow", unionId, tag, value: ref(), type: arm, loc };
+    const read = answer(arm, tag, receiver);
+    result =
+      result === null
+        ? read
+        : {
+            kind: "ternary",
+            cond: {
+              kind: "unionIsTag",
+              unionId,
+              tag,
+              value: ref(),
+              negated: false,
+              type: BOOL,
+              loc,
+            },
+            then: read,
+            else_: result,
+            type,
+            loc,
+          };
+  });
+  if (result === null) throw new InternalCompilerError(`lowerer bug: no arm answers ${name}`);
+  return {
+    kind: "seqExpr",
+    stmts: [{ kind: "varDecl", localId: stable.id, init: value, loc }],
+    result,
+    type,
+    loc,
+  };
+}
+
+/** A member read the arms answer through an ACCESSOR — an inherited
+ * getter (`this.renderer.hasOverlayEntries`). `unionDisc` reads record
+ * and class FIELD slots, so a getter arm needs the tag dispatch: each
+ * arm calls its own getter (once per read, as Node's read does). Data
+ * arms in the same union read their slot. Every arm must answer one
+ * type; a unit arm or an arm without the member declines (the caller's
+ * keyed read and fences own those). Null when no arm answers through an
+ * accessor — plain field unions keep `unionDisc`. */
+function lowerUnionAccessorRead(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+  unionId: string,
+  value: IrExpr,
+): IrExpr | null {
+  const def = lowerer.unions.get(unionId);
+  if (!def) return null;
+  const field = expr.name.text;
+  const getterName = `get:${field}`;
+  let type: IrType | null = null;
+  let anyAccessor = false;
+  const arms: { tag: number; read: (receiver: IrExpr) => IrExpr }[] = [];
+  for (let tag = 0; tag < def.arms.length; tag++) {
+    const arm = def.arms[tag]!;
+    if (isUnitType(arm)) return null;
+    let answer: IrType;
+    let read: (receiver: IrExpr) => IrExpr;
+    if (arm.kind === "record") {
+      const shape = lowerer.shapes.get(arm.shapeId);
+      if (!shape || shape.tuple) return null;
+      const data = shape.fields.find((f) => f.name === field);
+      if (data) {
+        answer = data.type;
+        read = (receiver) => ({
+          kind: "recordGet",
+          obj: receiver,
+          shapeId: arm.shapeId,
+          field,
+          type: data.type,
+          loc: locOf(expr),
+        });
+      } else {
+        const getter = shape.fields.find((f) => f.name === getterName);
+        if (!getter || getter.type.kind !== "func") return null;
+        anyAccessor = true;
+        answer = getter.type.ret;
+        read = (receiver) =>
+          lowerer.coerceToExpected(
+            {
+              kind: "callValue",
+              callee: {
+                kind: "recordGet",
+                obj: receiver,
+                shapeId: arm.shapeId,
+                field: getterName,
+                type: getter.type,
+                loc: locOf(expr),
+              },
+              args: [],
+              type: getter.type.kind === "func" ? getter.type.ret : DYN,
+              loc: locOf(expr),
+            },
+            answer,
+          );
+      }
+    } else if (arm.kind === "object") {
+      const info = lowerer.classes.get(arm.className) ?? null;
+      const slot = info?.fields.get(field);
+      if (slot !== undefined) {
+        answer = slot;
+        read = (receiver) => ({
+          kind: "fieldGet",
+          obj: receiver,
+          className: arm.className,
+          field,
+          type: slot,
+          loc: locOf(expr),
+        });
+      } else {
+        const getter = lowerer.findMethodOn(info, getterName);
+        if (!getter || getter.sig.ret.kind === "void") return null;
+        anyAccessor = true;
+        answer = getter.sig.ret;
+        read = (receiver) =>
+          lowerer.fieldGetExpr(
+            {
+              container: "accessor",
+              obj: receiver,
+              className: arm.className,
+              field,
+              fieldType: getter.sig.ret,
+            },
+            locOf(expr),
+            expr,
+          );
+      }
+    } else {
+      return null;
+    }
+    if (answer.kind === "void" || isUnitType(answer)) return null;
+    if (type !== null && !typeEquals(type, answer)) return null;
+    type = answer;
+    arms.push({ tag, read });
+  }
+  if (!anyAccessor || type === null || arms.length < 2) return null;
+  return perArmUnionRead(
+    lowerer,
     expr,
-    `reading '${field}' on a union-typed value (every arm must be an object/record ` +
-      `with a same-typed field '${field}'; ` +
-      `${NARROW_FIRST})`,
+    unionId,
+    value,
+    type,
+    "%unionMember",
+    (_arm, tag, receiver) => {
+      const entry = arms.find((a) => a.tag === tag);
+      if (!entry) throw new InternalCompilerError("lowerer bug: accessor arm missing");
+      return entry.read(receiver);
+    },
   );
 }
 
