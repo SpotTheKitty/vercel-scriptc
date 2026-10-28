@@ -109,6 +109,16 @@ export const JS_RELAXED_TSC_CODES: ReadonlySet<number> = new Set([
   2488,
   2721,
   2722,
+  // the async-iterator protocol demand (2504: "must have a
+  // '[Symbol.asyncIterator]()' method that returns an async iterator").
+  // Whether a value is async-iterable is a runtime fact of untyped JS, exactly
+  // like the sync demand (2488) relaxed above: `for await` over a non-iterable
+  // value and `yield*` in an async generator both lower through the runtime
+  // protocol openers, which read the method, call it, and throw TypeError at
+  // the site when it is missing, uncallable, or returns a non-object — the
+  // same protocol failure Node reports. 2505 is the sync sibling on the typed
+  // lowering lanes and stays enforced.
+  2504,
   // an UNUSED @ts-expect-error: the directive annotated an error visible
   // under the project's OWN tsconfig world — scriptc's world deliberately
   // differs (adopted options, hidden declaration twins), and an unused
