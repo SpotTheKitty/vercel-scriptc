@@ -19,13 +19,25 @@ console.log(typeof stored);
 const flipAlias = flip;
 console.log(flipAlias(5));
 
-// Declared inside a function and reading its parameter: instances are
-// module functions and cannot capture the enclosing frame.
+// Declared inside a function and reading a binding that is written after
+// the binding: the instance would hold a copy, while the closure reads
+// whatever the write left behind. (A binding that is never reassigned is
+// supported — it travels as a trailing parameter.)
 function outer(base: number): number {
-  const inner = <T>(x: T): [T, number] => [x, base];
+  let scale = base;
+  const inner = <T>(x: T): [T, number] => [x, scale];
+  scale += 1;
   return inner(3)[1];
 }
 console.log(outer(4));
+
+// Declared inside a GENERIC function: the enclosing frame re-lowers per
+// instantiation, so the shared instance cannot carry its type argument.
+function outerGeneric<U>(seed: U): string {
+  const inner = <T>(x: T): string => `${String(x)}${String(seed)}`;
+  return inner(3);
+}
+console.log(outerGeneric<number>(1));
 
 // Used as a value inside a function: each call of the enclosing function
 // makes a new function object (`make() !== make()`), and the compiled
