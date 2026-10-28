@@ -114,10 +114,22 @@ export function coercibleValue(lowerer: Lowerer, src: IrType, dst: IrType): bool
   return false;
 }
 
+/** Whether an omitted parameter position completes with the native
+ * undefined value: a checked-dynamic slot takes undefined as-is, and an
+ * undefined-armed union (`x?: T`, `x: T = e`) is the completed ABI
+ * spelling. */
+export function omittableTrailingParam(lowerer: Lowerer, type: IrType): boolean {
+  if (type.kind === "dyn" || typeEquals(type, UNDEFINED_T)) return true;
+  return type.kind === "union" && lowerer.armTag(type.unionId, UNDEFINED_T) >= 0;
+}
+
 /** Whether all parameters and the result adapt without a trap-only path.
  * Rest signatures are excluded, except a typed-rest source in a slot with
  * fixed parameters (the rest packing adapter); extra destination
- * parameters are ignored. */
+ * parameters are ignored. A source with MORE parameters than the slot is
+ * clean when every extra trailing one is omittable — the adapter passes
+ * that absent value explicitly (funcCoerceAdapter's omittedParams), the
+ * same way a call through the slot would. */
 export function cleanFuncAdaptable(
   lowerer: Lowerer,
   src: IrType & { kind: "func" },
@@ -125,8 +137,10 @@ export function cleanFuncAdaptable(
 ): boolean {
   if (restPackingAdapterFits(lowerer, src, dst)) return true;
   if (src.rest === true || dst.rest === true) return false;
-  if (src.params.length > dst.params.length) return false;
-  for (let i = 0; i < src.params.length; i++) {
+  for (let i = dst.params.length; i < src.params.length; i++) {
+    if (!omittableTrailingParam(lowerer, src.params[i]!)) return false;
+  }
+  for (let i = 0; i < src.params.length && i < dst.params.length; i++) {
     if (!lowerer.coercibleValue(dst.params[i]!, src.params[i]!)) return false;
   }
   if (dst.ret.kind === "void") return true;

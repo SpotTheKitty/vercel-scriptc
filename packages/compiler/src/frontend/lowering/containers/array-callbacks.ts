@@ -70,6 +70,7 @@ import {
 import { dynamicReceiverThrows } from "./dynamic-receivers.js";
 import { defaultAfterUndefined, lowerStaticallyUndefinedArgument } from "../optional-arguments.js";
 import { checkedFilterNarrowing } from "./filter-predicates.js";
+import { omittableTrailingParam } from "../coercions/function-adapters.js";
 
 /** `a.map(fn)` / `a.filter(fn)` / `a.forEach(fn)` desugar to a direct
  * call of a synthetic module function — one per method + element/result
@@ -2657,11 +2658,15 @@ export function lowerArraySortCall(
   let fnArg =
     undefinedArg ?? lowerOptionalElementComparator(lowerer, argNode, unwrappedArg, elem, arrT);
   // Reusable JS comparators often accept checked values. Adapt the array's
-  // element ABI just as other array callbacks do before sorting.
+  // element ABI just as other array callbacks do before sorting. A
+  // comparator declaring MORE parameters than sort passes (`(a, b, loose?)`,
+  // the imported semver shape) receives the surplus ones as undefined — the
+  // completion an ordinary two-argument call performs — so it adapts to the
+  // (a, b) slot like any other wider signature.
   if (
     fnArg.type.kind === "func" &&
-    fnArg.type.params.length <= 2 &&
-    fnArg.type.params.every((param) => lowerer.coercibleValue(elem, param))
+    fnArg.type.params.slice(2).every((param) => omittableTrailingParam(lowerer, param)) &&
+    fnArg.type.params.slice(0, 2).every((param) => lowerer.coercibleValue(elem, param))
   ) {
     // Arithmetic on inferred JS values retains a checked result because
     // it can produce BigInt. The sort callback still requires a number.
@@ -2670,7 +2675,7 @@ export function lowerArraySortCall(
         ? F64
         : fnArg.type.ret;
     const expected = funcOf(
-      fnArg.type.params.map(() => elem),
+      fnArg.type.params.slice(0, 2).map(() => elem),
       result,
     );
     if (!typeEquals(fnArg.type, expected)) fnArg = lowerer.coerceToExpected(fnArg, expected);
