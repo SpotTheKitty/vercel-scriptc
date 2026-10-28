@@ -60,6 +60,28 @@ export function assert(value: unknown, message?: unknown): void {
   if (value !== true) throw new Test262Error(text(message, "Expected true"));
 }
 
+function lengthOf(value: unknown): unknown {
+  return (value as { length?: unknown }).length;
+}
+
+function elementAt(value: unknown, index: number): unknown {
+  return (value as Record<number, unknown>)[index];
+}
+
+/** The bare `compareArray(a, b)` the upstream `harness/assert.js` defines
+ * alongside `assert`. It RETURNS a boolean (the throwing assertion is
+ * `assert.compareArray`), and it has no shape checks of its own: it reads
+ * `.length` off both operands, so a null operand throws TypeError there and
+ * here, and two operands without a length of their own compare equal. */
+export function compareArray(actual: unknown, expected: unknown): boolean {
+  const length = lengthOf(actual);
+  if (lengthOf(expected) !== length) return false;
+  for (let i = 0; typeof length === "number" && i < length; i++) {
+    if (!same(elementAt(expected, i), elementAt(actual, i))) return false;
+  }
+  return true;
+}
+
 export namespace assert {
   export function sameValue(actual: unknown, expected: unknown, message?: unknown): void {
     if (!same(actual, expected)) throw new Test262Error(text(message, "Expected SameValue"));

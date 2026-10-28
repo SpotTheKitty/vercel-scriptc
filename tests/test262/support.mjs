@@ -169,7 +169,11 @@ export function exclusion(source, meta, variant) {
         // Supported assertion calls; aliases, mutations, and reflection stay out.
       } else reason = "harness:assert-surface";
     } else if (meta.includes.includes("compareArray.js") && ts.isIdentifier(node) && node.text === "compareArray" &&
+      !(ts.isCallExpression(node.parent) && node.parent.expression === node) &&
       !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node && ts.isIdentifier(node.parent.expression) && node.parent.expression.text === "assert")) {
+      // assert.js defines the bare compareArray; only its direct call form is
+      // hosted (a value reference or property read would need the upstream
+      // function object and its format expando).
       reason = "harness:compareArray-surface";
     } else if (ts.isIdentifier(node) && node.text === "Test262Error") {
       if (!ts.isNewExpression(node.parent) || node.parent.expression !== node) reason = "harness:Test262Error-surface";
@@ -192,7 +196,9 @@ export function exclusion(source, meta, variant) {
 }
 
 export function prepare(source, asyncTest = false, marker = completion, variant = "strict", includes = []) {
-  const names = asyncTest ? "assert, Test262Error, $DONE" : "assert, Test262Error";
+  const names = asyncTest
+    ? "assert, compareArray, Test262Error, $DONE"
+    : "assert, compareArray, Test262Error";
   const end = asyncTest ? "" : `;console.log(${JSON.stringify(marker)});\n`;
   const helpers =
     (includes.includes("propertyHelper.js") ? `${propertyHelperSource}\n` : "") +
