@@ -4396,6 +4396,9 @@ export class Lowerer {
     "readsExitCode",
     "requestInitPropMutatedSyms",
     "classProtocols",
+    // The whole-program prepass analyzeJsWidenedBindings computes this set
+    // before lowering begins: a pure function of the program's modules.
+    "jsWidenedBindings",
     "cjsSplitRequireBindings",
     "cjsWholeExportSymbols",
     "cjsLiveMemberExports",
