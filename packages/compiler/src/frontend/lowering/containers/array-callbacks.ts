@@ -1822,10 +1822,10 @@ export function lowerArrayFlatMapCall(
 /** How each arm of a flatMap callback's union result contributes to the
  * output: an array arm appends its elements, an array arm the checker
  * types `never[]` (an empty literal such as `s ? s : []`) appends nothing,
- * and any other arm appends itself. */
+ * a tuple arm appends its fields, and any other arm appends itself. */
 interface FlatMapUnionPlan {
   outElem: IrType;
-  arms: ("spread" | "empty" | "value")[];
+  arms: ("spread" | "empty" | "tuple" | "value")[];
 }
 
 /** The plan for a callback returning `T | U[]`: every non-array arm must
@@ -1843,15 +1843,18 @@ function flatMapUnionPlan(
   const outElem = out.elem;
   const arms = lowerer.unions.get(fnRet.unionId)?.arms;
   if (!arms) return null;
-  // The `never[]` constituents of the callback's checked result.
+  // The constituents of the callback's checked result that can hold no
+  // element: a `never[]` arm, and the empty tuple a bare `[]` arm infers
+  // when the enclosing call has a contextual array type (`return x ? [a]
+  // : []` in a `f(): T[]`).
   const emptyArms: IrType[] = [];
   const signature = lowerer.checker.getCallSignatures(lowerer.typeOf(argNode))[0];
   if (signature) {
     const ret = lowerer.checker.getReturnTypeOfSignature(signature);
     for (const part of ret.isUnionType() ? ts.constituentTypes(ret) : [ret]) {
-      if (!lowerer.checker.isArrayType(part)) continue;
-      const [element] = lowerer.checker.getTypeArguments(part as ts.TypeReference);
-      if (element === undefined || (element.flags & ts.TypeFlags.Never) === 0) continue;
+      if (!lowerer.checker.isArrayType(part) && !lowerer.checker.isTupleType(part)) continue;
+      const element = lowerer.checker.getTypeArguments(part as ts.TypeReference)[0];
+      if (element !== undefined && (element.flags & ts.TypeFlags.Never) === 0) continue;
       const mapped = lowerer.mapTypeOf(part);
       if (mapped) emptyArms.push(mapped);
     }
@@ -1863,12 +1866,19 @@ function flatMapUnionPlan(
     if (outElem.kind !== "union") return false;
     return lowerer.armTag(outElem.unionId, t) >= 0;
   };
+  const tupleConverts = (arm: IrType & { kind: "record" }): boolean =>
+    (lowerer.shapes.get(arm.shapeId)?.fields ?? []).every((f) => converts(f.type));
   const plan: FlatMapUnionPlan["arms"] = [];
   for (const arm of arms) {
     if (arm.kind === "array" && emptyArms.some((e) => typeEquals(e, arm))) plan.push("empty");
     // An array arm copies its elements as they are stored, a present
     // undefined included, so its element type is the result's.
     else if (arm.kind === "array" && typeEquals(arm.elem, outElem)) plan.push("spread");
+    // A contextual array type makes a multi-statement body's `[pair]`
+    // infer as a one-element TUPLE (`return x ? [pair] : []`), whose
+    // fields contribute in order.
+    else if (arm.kind === "record" && lowerer.shapes.get(arm.shapeId)?.tuple && tupleConverts(arm))
+      plan.push("tuple");
     else if (arm.kind !== "array" && converts(arm)) plan.push("value");
     else return null;
   }
@@ -1924,6 +1934,27 @@ function flatMapUnionHelper(
       loc,
     };
     if (plan.arms[tag] === "empty") return [];
+    if (plan.arms[tag] === "tuple") {
+      const tuple = arm as IrType & { kind: "record" };
+      return (lowerer.shapes.get(tuple.shapeId)?.fields ?? []).map((field) => {
+        const read: IrExpr = {
+          kind: "recordGet",
+          obj: narrowed,
+          shapeId: tuple.shapeId,
+          field: field.name,
+          type: field.type,
+          loc,
+        };
+        return arrayValueStore(
+          lowerer,
+          outRef(),
+          outLength(),
+          lowerer.coerceToExpected(read, plan.outElem),
+          plan.outElem,
+          loc,
+        );
+      });
+    }
     if (plan.arms[tag] === "value") {
       // A unit arm's value is the unit itself, which has no narrowed
       // representation.
