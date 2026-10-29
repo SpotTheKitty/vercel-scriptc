@@ -120,7 +120,7 @@ static void scr_console_inst_print(ScrConsoleInst *inst, int which, ScrStr *text
   }
   ScrLogArg arg = {.tag = SCR_ARG_STR};
   arg.v.s = text;
-  scr_console_write_fd(inst->fd[which] == 2 ? 2 : 1, 1, &arg);
+  scr_console_write_fd(inst->fd[which] == 2 ? 2 : 1, 1, &arg, inst->ignore_errors);
 }
 
 /* 0 for the stdout members, 1 for the stderr members, -1 otherwise. */
