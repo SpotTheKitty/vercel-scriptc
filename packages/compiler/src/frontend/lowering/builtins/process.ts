@@ -442,7 +442,9 @@ export function lowerProcessStreamProperty(
     member !== "isTTY" &&
     member !== "columns" &&
     member !== "rows" &&
-    member !== "writableLength"
+    member !== "writableLength" &&
+    member !== "writableHighWaterMark" &&
+    member !== "writableNeedDrain"
   )
     return null;
   let recv: ts.Expression = expr.expression;
@@ -476,19 +478,31 @@ export function lowerProcessStreamProperty(
     // nothing is ever queued and Node's number is always 0. The other
     // members stay keyed reads — the runtime stream answers their live
     // values (isatty columns/rows, stdin readableLength).
-    if (member === "writableLength") {
+    if (
+      member === "writableLength" ||
+      member === "writableHighWaterMark" ||
+      member === "writableNeedDrain"
+    ) {
       // The receiver still EVALUATES: a call or property read that hands
       // back the stream runs its own side effects — and throws where Node
       // throws — before the constant answers, exactly as the read of the
       // member would. A pure receiver (the alias above) folds away.
-      const answer: IrExpr = { kind: "numLit", value: 0, type: F64, loc: locOf(expr) };
+      const answer: IrExpr =
+        member === "writableNeedDrain"
+          ? { kind: "boolLit", value: false, type: BOOL, loc: locOf(expr) }
+          : {
+              kind: "numLit",
+              value: member === "writableLength" ? 0 : 65536,
+              type: F64,
+              loc: locOf(expr),
+            };
       const effect = lowerer.lowerExpr(expr.expression);
       if (isSafeToDiscard(effect)) return answer;
       return {
         kind: "seqExpr",
         stmts: [{ kind: "exprStmt", expr: effect, loc: locOf(expr.expression) }],
         result: answer,
-        type: F64,
+        type: answer.type,
         loc: locOf(expr),
       };
     }
@@ -520,6 +534,16 @@ export function lowerProcessStreamProperty(
   // true for the same reason). Backpressure probes read 0 and stay
   // correct; the write itself never defers.
   if (member === "writableLength") return { kind: "numLit", value: 0, type: F64, loc };
+  // Node's default high-water mark for the process streams, and the
+  // drain flag a synchronous write never sets.
+  if (member === "writableHighWaterMark") {
+    if (stream === "stdin") return null;
+    return { kind: "numLit", value: 65536, type: F64, loc };
+  }
+  if (member === "writableNeedDrain") {
+    if (stream === "stdin") return null;
+    return { kind: "boolLit", value: false, type: BOOL, loc };
+  }
   if (member === "isTTY") {
     const type = lowerer.withUndefinedArm(BOOL);
     return {
@@ -999,6 +1023,58 @@ export function lowerProcessMethodCall(
       );
     }
     return { kind: "libCall", fn: "process.stdinSetRawMode", args: [mode], type: VOID, loc };
+  }
+  // process.stdout/stderr.on("drain", fn) and its spellings: Node emits
+  // 'drain' only after a write() returned false, and these writes are
+  // synchronous (they never return false), so the listener can never run.
+  // Registering it is therefore observably a no-op: the receiver and the
+  // listener are evaluated for their effects and nothing is retained.
+  // listenerCount/listeners/eventNames on the process streams stay
+  // refused, so the missing registration cannot be observed.
+  if (
+    [
+      "on",
+      "once",
+      "off",
+      "addListener",
+      "removeListener",
+      "prependListener",
+      "prependOnceListener",
+    ].includes(access.name.text) &&
+    ts.isPropertyAccessExpression(access.expression) &&
+    call.arguments.nodes.length === 2 &&
+    !call.arguments.nodes.some(ts.isSpreadElement)
+  ) {
+    const stream = lowerer.stdlibGlobalMember(access.expression, "process");
+    const evT = lowerer.typeOf(call.arguments.nodes[0]!);
+    if (
+      (stream === "stdout" || stream === "stderr") &&
+      evT.isStringLiteralType() &&
+      evT.value === "drain"
+    ) {
+      const loc = locOf(call);
+      const parent = call.parent;
+      const discarded =
+        ts.isExpressionStatement(parent) || (ts.isArrowFunction(parent) && parent.body === call);
+      if (!discarded) {
+        lowerer.unsupported(
+          "SC1090",
+          call,
+          `using the result of process.${stream}.${access.name.text}("drain", ...) (register it as its own statement)`,
+        );
+      }
+      const stmts: IrStmt[] = [];
+      for (const arg of call.arguments.nodes) {
+        const value = lowerer.lowerExprExpecting(arg, DYN);
+        if (!isSafeToDiscard(value)) stmts.push({ kind: "exprStmt", expr: value, loc: value.loc });
+      }
+      // The call's value is discarded (statement position or a void arrow
+      // body), so the lowering is the evaluated arguments alone; a bare
+      // unitLit has no standalone IR value, so the no-op result is the
+      // dynamic undefined a discarded call leaves.
+      const result: IrExpr = dynUndefinedExpr(loc);
+      return stmts.length === 0 ? result : { kind: "seqExpr", stmts, result, type: DYN, loc };
+    }
   }
   // process.stdout.on("resize", cb) (and once/off/removeListener/
   // addListener, stderr too): the terminal resize event, registered on the
