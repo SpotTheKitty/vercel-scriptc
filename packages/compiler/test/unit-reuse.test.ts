@@ -378,3 +378,41 @@ test("an import of a renamed export or of a default export lowers again when its
     await workspace.dispose();
   }
 }, 300_000);
+
+test("an import of an anonymous default export lowers again when its signature changes", async () => {
+  const workspace = await Workspace.create({
+    "values.ts": [
+      "export default function (value: number): number {",
+      "  return value * 2;",
+      "}",
+      "export function other(value: number): number {",
+      "  return value + 1;",
+      "}",
+      "",
+    ].join("\n"),
+    "main.ts": [
+      'import grow, { other } from "./values.js";',
+      "function grown(value: number): number {",
+      "  return grow(value);",
+      "}",
+      "function next(value: number): number {",
+      "  return other(value);",
+      "}",
+      "console.log(grown(4), next(1));",
+      "",
+    ].join("\n"),
+  });
+  try {
+    await workspace.build();
+    await workspace.edit(
+      "values.ts",
+      "export default function (value: number): number {",
+      "export default function (value: number, by = 1): number {",
+    );
+    const applied = await workspace.build();
+    expect(has(applied, "grown")).toBe(false);
+    expect(has(applied, "next")).toBe(true);
+  } finally {
+    await workspace.dispose();
+  }
+}, 300_000);

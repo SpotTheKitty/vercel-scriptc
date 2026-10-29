@@ -428,6 +428,22 @@ function surfaceText(sf: ts.SourceFile, node: ts.Node, js: boolean): string {
  * base of an expando `f.prop = value`; in JavaScript, where such statements
  * also define exports, every name and string it spells. */
 function statementNames(statement: ts.Statement, js: boolean, hooks: UnitReuseHooks): string[] {
+  const names = declaredNames(statement, js, hooks);
+  // A default export also declares the module's `default`, the name a
+  // default import holds (Alias), also when it has no name of its own.
+  return isDefaultExport(statement) && !names.includes("default") ? [...names, "default"] : names;
+}
+
+/** Whether `statement` is its module's default export: `export default`
+ * or `export =`. */
+function isDefaultExport(statement: ts.Statement): boolean {
+  if (ts.isExportAssignment(statement)) return true;
+  const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
+  return modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) === true;
+}
+
+/** The names `statement` declares (statementNames), apart from `default`. */
+function declaredNames(statement: ts.Statement, js: boolean, hooks: UnitReuseHooks): string[] {
   if (ts.isVariableStatement(statement)) {
     const names: string[] = [];
     for (const declaration of statement.declarationList.declarations.nodes) {
@@ -575,11 +591,7 @@ function aliasesOf(statement: ts.Statement, names: readonly string[], out: Alias
     if (clause !== undefined && ts.isNamedExports(clause)) specifiers(clause.elements.nodes);
     return;
   }
-  const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
-  if (
-    ts.isExportAssignment(statement) ||
-    modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) === true
-  ) {
+  if (isDefaultExport(statement)) {
     for (const name of names) add(name, "default");
     return;
   }
