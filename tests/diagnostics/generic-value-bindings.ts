@@ -19,14 +19,13 @@ console.log(typeof stored);
 const flipAlias = flip;
 console.log(flipAlias(5));
 
-// Declared inside a function and reading a binding that is written after
-// the binding: the instance would hold a copy, while the closure reads
-// whatever the write left behind. (A binding that is never reassigned is
-// supported — it travels as a trailing parameter.)
+// Declared inside a function and reading a binding declared AFTER it: a
+// call could run before the binding's initializer (a temporal dead zone).
+// (Bindings declared before it are supported — copied as trailing
+// parameters, or shared through a closure environment when reassigned.)
 function outer(base: number): number {
-  let scale = base;
   const inner = <T>(x: T): [T, number] => [x, scale];
-  scale += 1;
+  const scale = base + 1;
   return inner(3)[1];
 }
 console.log(outer(4));
