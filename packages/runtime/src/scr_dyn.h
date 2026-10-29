@@ -1447,6 +1447,24 @@ ScrBytes *scr_dyn_bytes_unbox(const ScrDyn *d);
 bool scr_dyn_bytes_is(const ScrDyn *d, int elem);
 bool scr_dyn_typed_array_is(const ScrDyn *d, int elem);
 bool scr_dyn_util_type_is(const ScrDyn *value, const ScrStr *probe);
+
+/* Primitive wrapper objects (scr_js_wrapper.c, linked only into programs
+ * that create one): `new String/Number/Boolean` (kind 0/1/2) and ToObject,
+ * with the compiled String, Number and Boolean constructor values; the
+ * instanceof, Object.prototype.toString and util.types answers that read
+ * the [[PrimitiveValue]] slot; and the guard of the consumers that cannot
+ * read it yet. */
+ScrDyn *scr_js_wrapper_new(double kind, ScrDyn *value, ScrDyn *string_ctor, ScrDyn *number_ctor,
+                           ScrDyn *boolean_ctor);
+ScrDyn *scr_js_wrapper_to_object(ScrDyn *value, ScrDyn *string_ctor, ScrDyn *number_ctor,
+                                 ScrDyn *boolean_ctor);
+bool scr_js_wrapper_instance_of(ScrDyn *value, double kind);
+ScrStr *scr_js_wrapper_object_tag(ScrDyn *value);
+bool scr_js_wrapper_type_is(ScrDyn *value, ScrStr *probe);
+ScrDyn *scr_js_wrapper_guard(ScrDyn *value, ScrStr *consumer);
+ScrArr *scr_js_wrapper_guard_list(ScrArr *values, ScrStr *consumer);
+bool scr_js_wrapper_is_string_method(ScrDyn *value, ScrStr *name);
+ScrDyn *scr_js_wrapper_this_string(ScrDyn *value, ScrStr *name);
 ScrDyn *scr_dyn_util_type_value(const ScrDyn *value, const ScrStr *probe);
 void scr_dyn_arr_push(ScrDyn *arr, ScrDyn *item);
 /* Spread completion for a runtime-arity argument list (`f(...xs)` in the

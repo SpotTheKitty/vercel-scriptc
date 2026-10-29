@@ -36,6 +36,7 @@ const features = {
   brotli: false,
   moduleNamespace: false,
   moduleNamespaceDyn: false,
+  primitiveWrapper: false,
   regex: true,
   copying: false,
   textDecoderLegacy: false,

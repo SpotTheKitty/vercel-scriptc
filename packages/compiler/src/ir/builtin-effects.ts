@@ -754,6 +754,15 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "record.throwFrozen",
   "dyn.toString",
   "dyn.valueOf",
+  // Primitive wrapper objects (scr_js_wrapper.c): the conversions run
+  // user hooks, member reads run getters, and the guard refuses.
+  "wrapper.new",
+  "wrapper.toObject",
+  "wrapper.objectTag",
+  "wrapper.isStringMethod",
+  "wrapper.thisString",
+  "wrapper.guard",
+  "wrapper.guardList",
   "string.fromCodePoint",
   "dyn.defineProps",
   "dyn.definePrototypeProps",
