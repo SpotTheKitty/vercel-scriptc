@@ -79679,6 +79679,7 @@
           "tests/corpus/process-builtin-values.js",
           "tests/corpus/process-hrtime.js",
           "tests/corpus/process-named-signals.cjs",
+          "tests/corpus/process-stream-drain.ts",
           "tests/corpus/process-uncaught-handler-throws.cjs",
           "tests/corpus/process-uncaught-loop.cjs",
           "tests/corpus/process-uncaught-module.mjs",
@@ -79686,6 +79687,7 @@
           "tests/corpus/process-uncaught-rejection.cjs",
           "tests/corpus/process-uncaught-sync.cjs",
           "tests/corpus/process-versions-storage.ts",
+          "tests/corpus/process-write-dynamic-chunks.ts",
           "tests/corpus/stdio-values.mjs",
           "tests/corpus/stdio-write-errors.mjs",
           "tests/corpus/stdio-write-overrides.mjs",
@@ -82049,6 +82051,8 @@
           "tests/corpus/stdio-write-overrides.mjs",
           "tests/corpus/stdio-write-errors.mjs",
           "tests/corpus/stdout-write-patch.ts",
+          "tests/corpus/process-stream-drain.ts",
+          "tests/corpus/process-write-dynamic-chunks.ts",
           "tests/harness/event-loop.test.ts"
         ]
       },
@@ -82092,6 +82096,8 @@
           "tests/corpus/stdio-write-overrides.mjs",
           "tests/corpus/stdio-write-errors.mjs",
           "tests/corpus/stdout-write-patch.ts",
+          "tests/corpus/process-stream-drain.ts",
+          "tests/corpus/process-write-dynamic-chunks.ts",
           "tests/harness/event-loop.test.ts"
         ]
       },
@@ -82135,6 +82141,8 @@
           "tests/corpus/stdio-write-overrides.mjs",
           "tests/corpus/stdio-write-errors.mjs",
           "tests/corpus/stdout-write-patch.ts",
+          "tests/corpus/process-stream-drain.ts",
+          "tests/corpus/process-write-dynamic-chunks.ts",
           "tests/harness/event-loop.test.ts"
         ]
       },

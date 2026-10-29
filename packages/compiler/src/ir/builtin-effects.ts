@@ -107,6 +107,7 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "ffi.argument",
   "ffi.memoryModule",
   "process.stdoutWrite",
+  "process.stdioWriteDyn",
   "process.stderrWrite",
   "process.stdoutWriteBytes",
   "process.stderrWriteBytes",

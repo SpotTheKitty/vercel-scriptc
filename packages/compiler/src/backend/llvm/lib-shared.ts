@@ -379,6 +379,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "process.envPairs": "scr_env_pairs",
   "process.stdoutWrite": "scr_process_stdout_write",
   "process.stdio": "scr_process_stdio",
+  "process.stdioWriteDyn": "scr_process_stdio_write_dyn",
   "process.stderrWrite": "scr_process_stderr_write",
   "process.isTTY": "scr_process_is_tty",
   // A promise that never settles (events.once of an event a synchronous

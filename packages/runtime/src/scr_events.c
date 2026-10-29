@@ -1311,6 +1311,52 @@ static void scr_stdio_resize_listener(ScrStdio *stream, ScrDyn *listener, bool r
 }
 
 #endif
+
+/* stream.write(chunk[, encoding][, callback]) on a process output stream:
+ * Node's Writable.write validation, then a synchronous descriptor write.
+ * Returns +1 (true/false) or NULL with an exception pending. */
+static ScrDyn *scr_stdio_write_call(ScrStdio *stream, ScrDyn *const *args, size_t argc) {
+  ScrDyn *arg = argc ? args[0] : scr_dyn_undefined();
+  ScrDyn *result = NULL;
+  ScrDyn *encoding = argc > 1 ? args[1] : scr_dyn_undefined();
+  ScrDyn *callback = argc > 2 ? args[2] : scr_dyn_undefined();
+  if (encoding->kind == SCR_DYN_FUNC) { callback = encoding; encoding = scr_dyn_undefined(); }
+  if (callback->kind != SCR_DYN_UNDEF && callback->kind != SCR_DYN_NULL && callback->kind != SCR_DYN_FUNC) {
+    scr_dyn_arg_type_fail("cb", "of type function", callback);
+    return NULL;
+  }
+  if (arg->kind == SCR_DYN_NULL) {
+    const char *m = "May not write null values to stream";
+    scr_throw_error_msg_code(SCR_ERR_TYPE, m, strlen(m), "ERR_STREAM_NULL_VALUES");
+    return NULL;
+  }
+  if (arg->kind == SCR_DYN_BYTES && arg->v.bytes->elem != SCR_BYTES_U8)
+    return scr_stdio_refusal("write of a typed array other than Uint8Array");
+  ScrBytes *bytes = NULL;
+  if (arg->kind == SCR_DYN_STR) {
+    if (encoding->kind != SCR_DYN_UNDEF && encoding->kind != SCR_DYN_NULL && encoding->kind != SCR_DYN_STR) {
+      return scr_stdio_refusal("write encoding");
+    }
+    ScrStr *enc = encoding->kind == SCR_DYN_STR ? scr_str_retain(encoding->v.str) : scr_str_new("utf8", 4);
+    bytes = scr_bytes_from_str(arg->v.str, enc);
+    scr_str_release(enc);
+  } else if (arg->kind == SCR_DYN_BYTES && arg->v.bytes->elem == SCR_BYTES_U8) {
+    bytes = arg->v.bytes->shared ? scr_bytes_copy(arg->v.bytes) : scr_bytes_retain(arg->v.bytes);
+  } else {
+    scr_dyn_arg_type_fail("chunk", "of type string or an instance of Buffer, TypedArray, or DataView", arg);
+    return NULL;
+  }
+  if (!bytes) return NULL;
+  int error = scr_stdio_write_raw(stream->fd, bytes->data, bytes->len);
+  scr_bytes_release(bytes);
+  if (error) {
+    scr_stdio_queue_write_error(stream, callback, error);
+    return scr_dyn_new_bool(false);
+  }
+  if (callback->kind == SCR_DYN_FUNC) scr_next_tick(scr_stdio_callback(callback, (void *)scr_stdio_write_done));
+  return scr_dyn_new_bool(true);
+}
+
 static ScrDyn *scr_stdio_method(ScrClosure *cb, ScrDyn *const *args, size_t argc) {
   int method = (int)scr_box_get_f64(cb->caps[0]);
   ScrDyn *self = scr_dyn_this_get();
@@ -1328,38 +1374,7 @@ static ScrDyn *scr_stdio_method(ScrClosure *cb, ScrDyn *const *args, size_t argc
     scr_dyn_arr_push(result, columns);
     scr_dyn_arr_push(result, rows);
   } else if (method == STDIO_WRITE && stream->fd != 0) {
-    ScrDyn *encoding = argc > 1 ? args[1] : scr_dyn_undefined();
-    ScrDyn *callback = argc > 2 ? args[2] : scr_dyn_undefined();
-    if (encoding->kind == SCR_DYN_FUNC) { callback = encoding; encoding = scr_dyn_undefined(); }
-    if (callback->kind != SCR_DYN_UNDEF && callback->kind != SCR_DYN_NULL && callback->kind != SCR_DYN_FUNC) {
-      scr_dyn_arg_type_fail("cb", "of type function", callback);
-      goto done;
-    }
-    ScrBytes *bytes = NULL;
-    if (arg->kind == SCR_DYN_STR) {
-      if (encoding->kind != SCR_DYN_UNDEF && encoding->kind != SCR_DYN_NULL && encoding->kind != SCR_DYN_STR) {
-        result = scr_stdio_refusal("write encoding");
-        goto done;
-      }
-      ScrStr *enc = encoding->kind == SCR_DYN_STR ? scr_str_retain(encoding->v.str) : scr_str_new("utf8", 4);
-      bytes = scr_bytes_from_str(arg->v.str, enc);
-      scr_str_release(enc);
-    } else if (arg->kind == SCR_DYN_BYTES && arg->v.bytes->elem == SCR_BYTES_U8) {
-      bytes = arg->v.bytes->shared ? scr_bytes_copy(arg->v.bytes) : scr_bytes_retain(arg->v.bytes);
-    } else {
-      scr_dyn_arg_type_fail("chunk", "of type string or an instance of Buffer, TypedArray, or DataView", arg);
-      goto done;
-    }
-    if (!bytes) goto done;
-    int error = scr_stdio_write_raw(stream->fd, bytes->data, bytes->len);
-    scr_bytes_release(bytes);
-    if (error) {
-      scr_stdio_queue_write_error(stream, callback, error);
-      result = scr_dyn_new_bool(false);
-      goto done;
-    }
-    if (callback->kind == SCR_DYN_FUNC) scr_next_tick(scr_stdio_callback(callback, (void *)scr_stdio_write_done));
-    result = scr_dyn_new_bool(true);
+    result = scr_stdio_write_call(stream, args, argc);
   } else if (method == STDIO_ON || method == STDIO_ONCE || method == STDIO_OFF) {
     ScrDyn *listener = argc > 1 ? args[1] : scr_dyn_undefined();
     if (listener->kind != SCR_DYN_FUNC) {
@@ -1595,6 +1610,19 @@ bool scr_dyn_process_stdio_is(const ScrDyn *value) {
 double scr_dyn_process_stdio_fd(const ScrDyn *value, const ScrDynPath *path) {
   ScrStdio *stream = scr_dyn_handle_unbox(value, SCR_DYNH_STDIO, path, "ProcessStream");
   return stream ? stream->fd : 0;
+}
+
+/* process.stdout/stderr.write(chunk) with a run-time chunk: the stream
+ * method's own validation and write, without creating the stream value
+ * or installing the write hook. False with an exception pending when the
+ * chunk is invalid. */
+bool scr_process_stdio_write_dyn(double fd, ScrDyn *chunk) {
+  ScrStdio *stream = &scr_stdio_streams[fd == 2 ? 2 : 1];
+  ScrDyn *result = scr_stdio_write_call(stream, &chunk, 1);
+  if (!result) return false;
+  bool accepted = scr_dyn_truthy(result);
+  scr_dyn_release(result);
+  return accepted;
 }
 
 /* ── the process 'exit' event ─────────────────────────────────────────

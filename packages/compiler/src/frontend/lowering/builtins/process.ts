@@ -1357,6 +1357,24 @@ export function lowerProcessMethodCall(
       if (data.type.kind === "dyn" && isJsSourceFile(ts.getSourceFileOfNode(call))) {
         data = { kind: "dynCheck", value: data, type: STRING, loc };
       }
+      // A chunk known only at run time (`any`, or a string | Uint8Array
+      // union): the runtime dispatches on the value — a string or a
+      // Uint8Array/Buffer writes, null throws ERR_STREAM_NULL_VALUES, any
+      // other value throws ERR_INVALID_ARG_TYPE, as Node's Writable.write
+      // does before writing anything. Only the one-argument form.
+      if (
+        args.length === 1 &&
+        (data.type.kind === "dyn" || data.type.kind === "union") &&
+        (data.type.kind === "dyn" || lowerer.dynConvertible(data.type))
+      ) {
+        return {
+          kind: "libCall",
+          fn: "process.stdioWriteDyn",
+          args: [numLit(stream === "stdout" ? 1 : 2, loc), lowerer.coerceToExpected(data, DYN)],
+          type: BOOL,
+          loc,
+        };
+      }
       const isBytes = data.type.kind === "bytes" && data.type.elem === "u8";
       if (!isBytes && data.type.kind !== "string") {
         lowerer.noLowering(
