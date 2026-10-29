@@ -93,95 +93,8 @@ import { protocolArm, protocolFieldArm } from "./class-protocol-dispatch.js";
 import { STREAM_OPERATORS, operatorSignalOptions, reduceSignalSetup } from "./lower-stream.js";
 import { deletedPropertyNames, fixedFieldFamily } from "./js-class-fields.js";
 
-/** Methods that builtin prototypes define (arrays, strings, collections,
- * promises, functions, regular expressions, iterators, Object.prototype):
- * a call of one of these names through an untyped receiver keeps the
- * runtime's method dispatch, which answers them, even when a class
- * declares a getter of the same name. */
-const BUILTIN_METHOD_NAMES: ReadonlySet<string> = new Set([
-  "add",
-  "apply",
-  "at",
-  "bind",
-  "call",
-  "catch",
-  "charAt",
-  "charCodeAt",
-  "clear",
-  "codePointAt",
-  "concat",
-  "copyWithin",
-  "delete",
-  "endsWith",
-  "entries",
-  "every",
-  "exec",
-  "fill",
-  "filter",
-  "finally",
-  "find",
-  "findIndex",
-  "findLast",
-  "findLastIndex",
-  "flat",
-  "flatMap",
-  "forEach",
-  "get",
-  "has",
-  "hasOwnProperty",
-  "includes",
-  "indexOf",
-  "isPrototypeOf",
-  "join",
-  "keys",
-  "lastIndexOf",
-  "localeCompare",
-  "map",
-  "match",
-  "matchAll",
-  "next",
-  "normalize",
-  "padEnd",
-  "padStart",
-  "pop",
-  "propertyIsEnumerable",
-  "push",
-  "reduce",
-  "reduceRight",
-  "repeat",
-  "replace",
-  "replaceAll",
-  "return",
-  "reverse",
-  "search",
-  "set",
-  "shift",
-  "slice",
-  "some",
-  "sort",
-  "splice",
-  "split",
-  "startsWith",
-  "substr",
-  "substring",
-  "test",
-  "then",
-  "throw",
-  "toLocaleString",
-  "toLowerCase",
-  "toReversed",
-  "toSorted",
-  "toSpliced",
-  "toString",
-  "toUpperCase",
-  "trim",
-  "trimEnd",
-  "trimStart",
-  "unshift",
-  "valueOf",
-  "values",
-  "with",
-]);
+/** The receiver local of a call rewritten for a getter-only name. */
+const GETTER_RECEIVER = "%dispatch.getter.receiver.";
 
 const STREAM_METHODS = new Set([
   "on",
@@ -1987,20 +1900,29 @@ export class ClassDynamicDispatch {
       byMethod.set(method, matching);
       return matching;
     };
-    // A name some class declares as a getter, and no class as a method: the
-    // call reads the member (running the getter) before it evaluates the
-    // arguments, as JavaScript reads the callee first, and then calls what
-    // it read. The runtime reads fields and other own properties of class
-    // instances that early itself (scr_dyn_prepare_method).
-    const getterReceiver = (method: string): boolean =>
-      !BUILTIN_METHOD_NAMES.has(method) &&
-      this.propertyReceivers(lowerer, true).some(({ info }) =>
-        findMethodOn(lowerer, info, `get:${method}`),
-      );
-    const getterCall = (fn: IrFunction, invoke: IrExpr & { kind: "dynInvoke" }): IrExpr => {
+    // A name some class declares as a getter, and no class as a method: on
+    // an instance of such a class the call reads the member (running the
+    // getter) before it evaluates the arguments, as JavaScript reads the
+    // callee first, and then calls what it read. Any other receiver keeps
+    // the runtime's method dispatch, which answers builtin methods of the
+    // same name (`n.toFixed(2)` while a class declares `get toFixed()`).
+    // The runtime reads fields and other own properties of class instances
+    // that early itself (scr_dyn_prepare_method).
+    const getterCapsules = (method: string): string[] => {
+      const keys = new Set<string>();
+      for (const { info, capsule } of this.propertyReceivers(lowerer, true))
+        if (findMethodOn(lowerer, info, `get:${method}`))
+          keys.add(typeKey({ kind: "object", className: capsule.def.name }));
+      return [...keys];
+    };
+    const getterCall = (
+      fn: IrFunction,
+      invoke: IrExpr & { kind: "dynInvoke" },
+      capsules: readonly string[],
+    ): IrExpr => {
       const loc = invoke.loc;
       const receiverLocal = {
-        id: `%dispatch.receiver.${fn.locals.length}`,
+        id: `${GETTER_RECEIVER}${fn.locals.length}`,
         name: "receiver",
         type: DYN,
         mutable: false,
@@ -2014,10 +1936,27 @@ export class ClassDynamicDispatch {
       };
       fn.locals.push(calleeLocal);
       const receiver = varRef(receiverLocal.id, DYN, loc);
-      return {
+      const isCapsule = (key: string): IrExpr => ({
+        kind: "libCall",
+        fn: "dyn.typedRefIs",
+        args: [receiver, { kind: "strLit", value: key, type: STRING, loc }],
+        type: BOOL,
+        loc,
+      });
+      const cond = capsules.slice(1).reduce<IrExpr>(
+        (rest, key) => ({
+          kind: "ternary",
+          cond: isCapsule(key),
+          then: { kind: "boolLit", value: true, type: BOOL, loc },
+          else_: rest,
+          type: BOOL,
+          loc,
+        }),
+        isCapsule(capsules[0]!),
+      );
+      const read: IrExpr = {
         kind: "seqExpr",
         stmts: [
-          { kind: "varDecl", localId: receiverLocal.id, init: invoke.recv, loc },
           {
             kind: "varDecl",
             localId: calleeLocal.id,
@@ -2038,6 +1977,20 @@ export class ClassDynamicDispatch {
           calleeName: invoke.calleeName,
           ...(invoke.calleeNameValue ? { calleeNameValue: invoke.calleeNameValue } : {}),
           args: invoke.args,
+          type: DYN,
+          loc,
+        },
+        type: DYN,
+        loc,
+      };
+      return {
+        kind: "seqExpr",
+        stmts: [{ kind: "varDecl", localId: receiverLocal.id, init: invoke.recv, loc }],
+        result: {
+          kind: "ternary",
+          cond,
+          then: read,
+          else_: { ...invoke, recv: receiver },
           type: DYN,
           loc,
         },
@@ -3117,9 +3070,12 @@ export class ClassDynamicDispatch {
             expr.kind === "dynInvoke" &&
             candidates(invoke.method).length === 0 &&
             !staticCandidates(invoke.method) &&
-            getterReceiver(invoke.method)
-          )
-            return getterCall(fn, expr);
+            // The other receivers' call this rewrite left in place.
+            !(expr.recv.kind === "varRef" && expr.recv.localId.startsWith(GETTER_RECEIVER))
+          ) {
+            const capsules = getterCapsules(invoke.method);
+            if (capsules.length > 0) return getterCall(fn, expr, capsules);
+          }
           if (
             !invoke ||
             (candidates(invoke.method).length === 0 &&

@@ -97,8 +97,9 @@ try {
 } catch (e) {
   console.log(e instanceof TypeError, e.message);
 }
-// A class field and a getter named like array methods do not change calls
-// of those methods on arrays.
+// Fields and getters named like builtin methods: calls of those methods on
+// arrays and numbers through untyped receivers keep the builtin, and the
+// getters still answer for class instances.
 class Material {
   constructor() {
     this.map = null;
@@ -106,8 +107,18 @@ class Material {
   get filter() {
     return () => "material-filter";
   }
+  get toFixed() {
+    return (digits) => `material-${digits}`;
+  }
 }
 function doubled(items) {
   return items.map((x) => x * 2).filter((x) => x > 2);
 }
-console.log(new Material().map, new Material().filter(), doubled([1, 2, 3]).join(","));
+function fixed(value, digits) {
+  return value.toFixed(digits);
+}
+function filtered(value) {
+  return value.filter(() => true);
+}
+console.log(new Material().map, doubled([1, 2, 3]).join(","), filtered([4, 5]).join(","));
+console.log(fixed(3.14159, 2), fixed(new Material(), 3), filtered(new Material()));
