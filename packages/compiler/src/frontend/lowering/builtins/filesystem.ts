@@ -1110,13 +1110,37 @@ export function lowerStatsMethodCall(
   );
 }
 
+/** The watch-listener shapes: () , (eventType: string), and
+ * (eventType: string, filename: string | null) — the filename parameter
+ * must admit null (Node passes null when the platform names nothing), or
+ * be the checked dynamic. Returns the parameter count, or null when the
+ * shape has no lowering. */
+function watchListenerArity(lowerer: Lowerer, cb: IrExpr): 0 | 1 | 2 | null {
+  if (cb.type.kind !== "func" || cb.type.ret.kind !== "void" || cb.type.params.length > 2)
+    return null;
+  const [event, name] = cb.type.params;
+  if (event !== undefined && event.kind !== "string" && event.kind !== "dyn") return null;
+  if (name !== undefined && name.kind !== "dyn") {
+    const def = name.kind === "union" ? lowerer.unions.get(name.unionId) : undefined;
+    if (
+      !def ||
+      !def.arms.some((a) => a.kind === "nullT") ||
+      !def.arms.some((a) => a.kind === "string") ||
+      !def.arms.every((a) => a.kind === "nullT" || a.kind === "undefinedT" || a.kind === "string")
+    )
+      return null;
+  }
+  return cb.type.params.length as 0 | 1 | 2;
+}
+
 /** `fs.watch(path[, options][, listener])` → the fs.watch libCall
  * (scr_watch.c — kqueue EVFILT_VNODE on the opened path; an unopenable
  * path THROWS Node's fs error synchronously, the polling-fallback catch
  * shape). The listener fires with "rename"/"change" and takes zero
- * parameters or the eventType string — the filename parameter has no
- * lowering (kqueue watches the inode, not the directory entry; you
- * watched one path). The options record follows the options-record
+ * parameters, the eventType string, or (eventType, filename: string |
+ * null) — the filename is the entry name on a directory watch and the
+ * watched file's basename otherwise (Linux inotify names both; a macOS
+ * directory watch has no name source until F3). The options record follows the options-record
  * stance: persistent: true, recursive: false, and encoding: "utf8"
  * state the lowered behavior and are accepted; persistent: false
  * (a watcher that does NOT hold the loop), recursive: true (kqueue
@@ -1187,7 +1211,7 @@ export function lowerFsWatchCall(lowerer: Lowerer, expr: ts.CallExpression, loc:
         lowerer.noLowering(
           "fs.watch with a non-utf8 encoding",
           prop,
-          "the encoding applies to the filename argument, which has no lowering — utf8 (the default) is accepted",
+          "the filename argument is a string — utf8 (the default) is the accepted encoding",
         );
       }
       if (key === "signal") {
@@ -1219,19 +1243,11 @@ export function lowerFsWatchCall(lowerer: Lowerer, expr: ts.CallExpression, loc:
       : null;
   if (listenerArg !== null) {
     const cb = lowerer.lowerExpr(listenerArg);
-    if (cb.type.kind !== "func" || cb.type.ret.kind !== "void" || cb.type.params.length > 1) {
+    if (watchListenerArity(lowerer, cb) === null) {
       lowerer.noLowering(
         "fs.watch with this listener shape",
         listenerArg,
-        "the listener takes () or (eventType: string) — the filename parameter has no lowering (you watched one path)",
-      );
-    }
-    const param = cb.type.params[0];
-    if (param !== undefined && param.kind !== "string") {
-      lowerer.unsupported(
-        "SC1090",
-        listenerArg,
-        `watch listeners whose parameter is not the eventType string (got '${lowerer.fmt(param)}')`,
+        "the listener takes (), (eventType: string), or (eventType: string, filename: string | null)",
       );
     }
     args.push(cb);
@@ -1245,10 +1261,12 @@ export function lowerFsWatchCall(lowerer: Lowerer, expr: ts.CallExpression, loc:
   };
 }
 
-/** Method calls on FSWatcher receivers: close() — idempotent, statement
- * position (Node returns void there too). Everything else @types/node
- * declares (ref/unref, the EventEmitter surface) fences member-
- * qualified. Null for non-watcher receivers. */
+/** Method calls on FSWatcher receivers: close() (idempotent, statement
+ * position — Node returns void there too) and the EventEmitter surface for
+ * 'change', 'error' and 'close' (on/once/addListener/prependListener/
+ * prependOnceListener/off/removeListener, registered as their own
+ * statement). Everything else @types/node declares (ref/unref, other
+ * events) fences member-qualified. Null for non-watcher receivers. */
 export function lowerWatcherMethodCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -1263,10 +1281,82 @@ export function lowerWatcherMethodCall(
     const receiver = lowerer.lowerExpr(access.expression);
     return { kind: "libCall", fn: "watcher.close", args: [receiver], type: VOID, loc };
   }
+  // The EventEmitter surface for the three events the watcher emits:
+  // "change" (the listener shapes fs.watch takes), "error", and "close".
+  const ON = ["on", "once", "addListener", "prependListener", "prependOnceListener"];
+  if (
+    (ON.includes(name) || name === "off" || name === "removeListener") &&
+    call.arguments.nodes.length === 2
+  ) {
+    const evT = lowerer.typeOf(call.arguments.nodes[0]!);
+    const event = evT.isStringLiteralType() ? evT.value : null;
+    const code = event === "change" ? 0 : event === "error" ? 1 : event === "close" ? 2 : -1;
+    if (code < 0) {
+      lowerer.noLowering(
+        `FSWatcher.${name}(${event === null ? "non-literal event" : `"${event}"`}, ...)`,
+        call.arguments.nodes[0]!,
+        '"change", "error", and "close" are the supported FSWatcher events (as literals)',
+      );
+    }
+    const parent = call.parent;
+    if (
+      !ts.isExpressionStatement(parent) &&
+      !(ts.isArrowFunction(parent) && parent.body === call)
+    ) {
+      lowerer.unsupported(
+        "SC1090",
+        call,
+        `using the result of FSWatcher.${name} (register it as its own statement)`,
+      );
+    }
+    const receiver = lowerer.lowerExpr(access.expression);
+    const cb = lowerer.lowerExpr(call.arguments.nodes[1]!);
+    if (name === "off" || name === "removeListener") {
+      return {
+        kind: "libCall",
+        fn: "watcher.off",
+        args: [receiver, numLit(code, loc), cb],
+        type: VOID,
+        loc,
+      };
+    }
+    const ok =
+      code === 0
+        ? watchListenerArity(lowerer, cb) !== null
+        : code === 1
+          ? cb.type.kind === "func" &&
+            cb.type.ret.kind === "void" &&
+            cb.type.params.length <= 1 &&
+            (cb.type.params[0] === undefined ||
+              cb.type.params[0].kind === "dyn" ||
+              (cb.type.params[0].kind === "object" && cb.type.params[0].className === "%Error"))
+          : cb.type.kind === "func" && cb.type.ret.kind === "void" && cb.type.params.length === 0;
+    if (!ok) {
+      lowerer.noLowering(
+        `FSWatcher.${name}("${event}", ...) with this listener shape`,
+        call.arguments.nodes[1]!,
+        code === 0
+          ? "the listener takes (), (eventType: string), or (eventType: string, filename: string | null)"
+          : code === 1
+            ? "the listener takes () or (error: Error)"
+            : "the listener takes ()",
+      );
+    }
+    const flags =
+      (name === "once" || name === "prependOnceListener" ? 1 : 0) |
+      (name.startsWith("prepend") ? 2 : 0);
+    return {
+      kind: "libCall",
+      fn: "watcher.on",
+      args: [receiver, numLit(code, loc), numLit(flags, loc), cb],
+      type: VOID,
+      loc,
+    };
+  }
   lowerer.noLowering(
     `FSWatcher.${name}`,
     call,
-    "close() is the supported FSWatcher member",
+    'close(), and on/once/addListener/prependListener/prependOnceListener/off/removeListener for "change", "error", and "close" are the supported FSWatcher members',
     lowerer.checker.getSymbolAtLocation(access.name),
   );
 }

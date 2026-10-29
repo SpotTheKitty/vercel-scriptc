@@ -555,11 +555,29 @@ declare module "node:fs" {
   ): void;
   /* fs.watch — the file-watching slice (scr_watch.c, kqueue EVFILT_VNODE):
    * "rename"/"change" events on ONE path, watcher.close() to stop. The
-   * listener takes zero parameters or the eventType string (the filename
-   * parameter has no lowering); an open watcher keeps the loop alive. A
-   * path that cannot be opened THROWS Node's fs error synchronously. */
+   * listener takes (), (eventType) or (eventType, filename); an open
+   * watcher keeps the loop alive. A path that cannot be opened THROWS
+   * Node's fs error synchronously. */
+  export type WatchEventType = "rename" | "change";
+  /* (eventType, filename): filename is the changed entry's name (null when
+   * the platform does not provide one). */
+  export type WatchListener<T> = (event: WatchEventType, filename: T | null) => void;
   export interface FSWatcher {
     close(): void;
+    on(event: "change", listener: (eventType: string, filename: string | Buffer) => void): this;
+    on(event: "error", listener: (error: Error) => void): this;
+    on(event: "close", listener: () => void): this;
+    once(event: "change", listener: (eventType: string, filename: string | Buffer) => void): this;
+    once(event: "error", listener: (error: Error) => void): this;
+    once(event: "close", listener: () => void): this;
+    addListener(
+      event: "change",
+      listener: (eventType: string, filename: string | Buffer) => void,
+    ): this;
+    addListener(event: "error", listener: (error: Error) => void): this;
+    addListener(event: "close", listener: () => void): this;
+    off(event: "change" | "error" | "close", listener: (...args: any[]) => void): this;
+    removeListener(event: "change" | "error" | "close", listener: (...args: any[]) => void): this;
   }
   /* The options-record stance (see http.RequestOptions): persistent: true,
    * recursive: false, and encoding: "utf8" state the lowered behavior and
@@ -571,11 +589,11 @@ declare module "node:fs" {
     encoding?: string;
     [option: string]: unknown;
   }
-  export function watch(path: string, listener?: (eventType: string) => void): FSWatcher;
+  export function watch(path: string, listener?: WatchListener<string>): FSWatcher;
   export function watch(
     path: string,
     options: WatchOptions,
-    listener?: (eventType: string) => void,
+    listener?: WatchListener<string>,
   ): FSWatcher;
   /* fs.promises IS the fs/promises module (Node's rule) — the namespace-
    * import form `fs.promises.readFile(...)` lowers through the same

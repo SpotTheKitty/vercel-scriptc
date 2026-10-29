@@ -448,17 +448,19 @@ export function emitFilesystemLibCall(host: LlvmEmitterContext, e: LibCallExpr):
     // loop (usesTimers).
     host.usesTimers = true;
     const path = host.emitExpr(e.args[0]!);
-    host.declare(`declare ptr @scr_fs_watch(ptr, ptr, ptr)`);
+    host.declare(`declare ptr @scr_fs_watch(ptr, ptr, ptr, i1 zeroext)`);
     const t = B.tmp();
-    B.line(`${t} = call ptr @scr_fs_watch(ptr ${path.name}, ptr null, ptr null)`);
+    B.line(`${t} = call ptr @scr_fs_watch(ptr ${path.name}, ptr null, ptr null, i1 false)`);
     const out = host.own({ name: t, type: e.type });
     host.emitPendingCheck();
     return out;
   }
   if (e.fn === "fs.watchCb") {
     // The callback MOVES into the watcher's registry; the adapter is
-    // runtime-provided per listener shape (zero-param, or the eventType
-    // string). May throw (ENOENT) — the standard pending check.
+    // runtime-provided per listener shape (zero-param, the eventType
+    // string, or the compiler's (eventType, filename) adapter). May
+    // throw (ENOENT, or the macOS directory-names refusal) — the
+    // standard pending check.
     host.usesTimers = true;
     const cbT = e.args[1]!.type;
     if (cbT.kind !== "func")
@@ -466,14 +468,79 @@ export function emitFilesystemLibCall(host: LlvmEmitterContext, e: LibCallExpr):
     const path = host.emitExpr(e.args[0]!);
     const cb = host.emitExpr(e.args[1]!);
     host.toHeap(cb);
-    const adapter = cbT.params.length === 0 ? "scr_watch_thunk0" : "scr_watch_thunk_event";
-    host.declare(`declare void @${adapter}(ptr, ptr)`);
-    host.declare(`declare ptr @scr_fs_watch(ptr, ptr, ptr)`);
+    const adapter =
+      cbT.params.length === 0
+        ? "scr_watch_thunk0"
+        : cbT.params.length === 1
+          ? "scr_watch_thunk_event"
+          : host.watchNameThunkFor(cbT);
+    // The named form is a definition this module emits; only the runtime's
+    // fixed adapters need a declaration.
+    if (cbT.params.length < 2) host.declare(`declare void @${adapter}(ptr, ptr, ptr)`);
+    host.declare(`declare ptr @scr_fs_watch(ptr, ptr, ptr, i1 zeroext)`);
     const t = B.tmp();
-    B.line(`${t} = call ptr @scr_fs_watch(ptr ${path.name}, ptr ${cb.name}, ptr @${adapter})`);
+    B.line(
+      `${t} = call ptr @scr_fs_watch(ptr ${path.name}, ptr ${cb.name}, ptr @${adapter}, i1 ${cbT.params.length === 2 ? "true" : "false"})`,
+    );
     const out = host.own({ name: t, type: e.type });
     host.emitPendingCheck();
     return out;
+  }
+  if (e.fn === "watcher.on") {
+    // (recv, event, flags, listener) — flags: 1 once, 2 prepend. The
+    // listener MOVES in; the adapter follows the event (0 change, 1
+    // error, 2 close — CLOSE takes no adapter, a plain zero-arg call).
+    // Registration can throw (the macOS directory-names refusal).
+    const flagsArg = e.args[2]!;
+    if (flagsArg.kind !== "numLit")
+      throw new InternalCompilerError("llvm emitter bug: watcher.on flags not a literal");
+    const flags = flagsArg.value;
+    const codeArg = e.args[1]!;
+    if (codeArg.kind !== "numLit")
+      throw new InternalCompilerError("llvm emitter bug: watcher.on event not a literal");
+    const code = codeArg.value;
+    const cbT = e.args[3]!.type;
+    if (cbT.kind !== "func")
+      throw new InternalCompilerError("llvm emitter bug: watcher.on listener not a func");
+    const w = host.emitExpr(e.args[0]!);
+    const event = host.emitExpr(e.args[1]!);
+    const cb = host.emitExpr(e.args[3]!);
+    host.toHeap(cb);
+    let adapter = "null";
+    let wantsName = false;
+    if (code === 0) {
+      adapter =
+        cbT.params.length === 0
+          ? "scr_watch_thunk0"
+          : cbT.params.length === 1
+            ? "scr_watch_thunk_event"
+            : host.watchNameThunkFor(cbT);
+      wantsName = cbT.params.length === 2;
+      // The named form is a definition this module emits; only the runtime's
+      // fixed adapters need a declaration.
+      if (cbT.params.length < 2) host.declare(`declare void @${adapter}(ptr, ptr, ptr)`);
+    } else if (code === 1) {
+      adapter = cbT.params.length === 0 ? "scr_watch_err_thunk0" : host.watchErrorThunkFor(cbT);
+      if (cbT.params.length === 0) host.declare(`declare void @scr_watch_err_thunk0(ptr, ptr)`);
+    }
+    host.declare(
+      `declare void @scr_watcher_on(ptr, double, ptr, ptr, i1 zeroext, i1 zeroext, i1 zeroext)`,
+    );
+    B.line(
+      `call void @scr_watcher_on(ptr ${w.name}, double ${event.name}, ptr ${cb.name}, ptr ${adapter === "null" ? "null" : `@${adapter}`}, i1 ${flags & 1 ? "true" : "false"}, i1 ${flags & 2 ? "true" : "false"}, i1 ${wantsName ? "true" : "false"})`,
+    );
+    host.emitPendingCheck();
+    return { name: "", type: e.type };
+  }
+  if (e.fn === "watcher.off") {
+    // Removal is by pointer identity: the listener stays borrowed
+    // (never heap-moved), exactly like process.offExit's.
+    const w = host.emitExpr(e.args[0]!);
+    const event = host.emitExpr(e.args[1]!);
+    const cb = host.emitExpr(e.args[2]!);
+    host.declare(`declare void @scr_watcher_off(ptr, double, ptr)`);
+    B.line(`call void @scr_watcher_off(ptr ${w.name}, double ${event.name}, ptr ${cb.name})`);
+    return { name: "", type: e.type };
   }
   if (e.fn === "watcher.close") {
     // Idempotent; never throws.

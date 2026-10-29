@@ -285,6 +285,8 @@ import {
   cryptoIntThunkFor,
   type BytesThunkValue,
   fsRenameThunkFor,
+  watchNameThunkFor,
+  watchErrorThunkFor,
   streamCbThunkFor,
   zlibBytesThunkFor,
 } from "./expr-stream-callbacks.js";
@@ -8155,6 +8157,14 @@ export class LlEmitter {
 
   fsRenameThunkFor(cbT: IrType & { kind: "func" }): string {
     return fsRenameThunkFor(this, cbT);
+  }
+
+  watchNameThunkFor(cbT: IrType & { kind: "func" }): string {
+    return watchNameThunkFor(this, cbT);
+  }
+
+  watchErrorThunkFor(cbT: IrType & { kind: "func" }): string {
+    return watchErrorThunkFor(this, cbT);
   }
 
   cryptoBytesThunkFor(
