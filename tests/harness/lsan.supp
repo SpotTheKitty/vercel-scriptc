@@ -20,6 +20,11 @@ leak:node::crypto::GetSystemStoreCACertificates
 leak:node::crypto::GetExtraCACertificates
 leak:node::crypto::GetOpenSSLSystemCertificates
 leak:node::crypto::LoadCertsFromBIO
+# The same certificates under a stripped libnode (the packs the
+# libnode-packs workflow builds), where the loading threads' Node frames
+# have no names: each one is parsed through libnode's OpenSSL PEM reader.
+# The runtime has no OpenSSL of its own, so only libnode reaches it.
+leak:PEM_ASN1_read_bio
 # The certificates' lazily decoded keys, cached in them when a root store
 # is built.
 leak:node::crypto::NewRootCertStore

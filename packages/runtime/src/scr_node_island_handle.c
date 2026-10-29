@@ -7,8 +7,10 @@
  * per V8 value while the runtime holds it and the runtime keeps one ref per
  * id (ni_refs), so the same V8 object always comes back as the same ref:
  * `===` compares handle pointers and identity is exact. When the last box
- * releases a ref, the bridge drops its Global and V8 may collect the
- * object (acyclic garbage; cycles across both heaps wait for NI-8).
+ * releases a ref, the bridge drops its reference and V8 may collect the
+ * object. Cycles across both heaps are collected by NI-8
+ * (scr_node_island_gc.c): V8 keeps an import alive only while the runtime
+ * may still use it.
  *
  * Boundary rules (DESIGN §2.5.1): undefined, null, booleans, numbers
  * (exact: -0, NaN), strings (WTF-8, lone surrogates kept) and BigInt are
@@ -1225,6 +1227,44 @@ ScrDyn *scr_ni_value_in(const ScrNodeValue *v) {
   return d != NULL ? d : scr_dyn_retain(scr_dyn_undefined());
 }
 
+/* NI-8: the pinned runtime objects and the refs they stand for (the pin
+ * table holds one reference to each). */
+size_t scr_ni_gc_pins(void ***objs, void ***refs) {
+  static void **o = NULL, **r = NULL;
+  static size_t cap = 0;
+  if (nh_npins > cap) {
+    cap = nh_npins * 2;
+    void **go = realloc(o, cap * sizeof *go);
+    if (go == NULL) nh_oom();
+    o = go;
+    void **gr = realloc(r, cap * sizeof *gr);
+    if (gr == NULL) nh_oom();
+    r = gr;
+  }
+  for (size_t i = 0; i < nh_npins; i++) {
+    o[i] = nh_pins[i].obj;
+    r[i] = nh_pins[i].ref;
+  }
+  *objs = o;
+  *refs = r;
+  return nh_npins;
+}
+
+/* NI-8: the ref an island handle box holds, its reference count and its
+ * import id (0 unless it is the id's own ref: stubs, aliases and refs
+ * whose import was transplanted have none). */
+void *scr_ni_gc_ref_info(void *r, size_t *rc, uint32_t *id) {
+  ScrNodeRef *ref = r;
+  if (ref == NULL) return NULL;
+  *rc = ref->rc;
+  *id = ref->id != 0 && ref->id < ni_refs_cap && ni_refs[ref->id] == ref ? ref->id : 0;
+  return ref;
+}
+
+void *scr_ni_gc_ref(const ScrDyn *box, size_t *rc, uint32_t *id) {
+  return scr_ni_gc_ref_info(box->v.handle.ptr, rc, id);
+}
+
 /* ── island arrays as copies (results typed as arrays of copied values) ─
  * An island array whose declared native type is an array of primitives or
  * strings (or arrays of those) crosses as a copy of its elements, the
@@ -1304,8 +1344,10 @@ static bool nh_op_set(void *h, const char *key, size_t key_len, const ScrDyn *va
 }
 
 /* A member that reads back as one of the program's own functions (a
- * module the program shares with its islands gives them its native
- * exports): called natively, with the island object as the receiver. */
+ * native function stored on the island object, whose representative
+ * crossed back as the native value, or a member of a module the program
+ * shares with its islands): called natively, with the island object as
+ * `this`, as V8 would call the representative. */
 static bool nh_is_native_function(const ScrDyn *fn) {
   return !scr_ni_is_handle(fn) && scr_dyn_is_callable(fn);
 }
