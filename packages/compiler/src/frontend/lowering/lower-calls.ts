@@ -5,6 +5,7 @@ import {
 } from "./builtins/array-classes.js";
 import { structuralCallInstance } from "./structural-instances.js";
 import { checkedPrivateMethodReceiver, privateNameClass } from "./private-brands.js";
+import { lowerStaticPrivateCall } from "./private-statics.js";
 import { assertFunctionAliasOf } from "./lower-assert.js";
 import { keyedHelperName } from "./stable-names.js";
 import { perKeyOrder } from "./key-order-witness.js";
@@ -669,6 +670,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
     ts.isPrivateIdentifier(expr.expression.name) &&
     !expr.expression.questionDotToken
   ) {
+    const staticPrivate = lowerStaticPrivateCall(lowerer, expr, expr.expression);
+    if (staticPrivate) return staticPrivate;
     const privateCall = lowerCheckedPrivateMethodCall(lowerer, expr, expr.expression);
     if (privateCall) return privateCall;
   }
