@@ -416,7 +416,7 @@ export function lowerProcessStreamProperty(
       kind: "dynKeyGet",
       value: {
         kind: "libCall",
-        fn: "process.stdio",
+        fn: "process.stdioSlot",
         args: [numLit(direct === "stdout" ? 1 : 2, loc)],
         type: DYN,
         loc,
@@ -1242,7 +1242,7 @@ export function lowerProcessMethodCall(
       if (programPatchesStdio(lowerer) && !args.some(ts.isSpreadElement)) {
         const handle: IrExpr = {
           kind: "libCall",
-          fn: "process.stdio",
+          fn: "process.stdioSlot",
           args: [numLit(stream === "stdout" ? 1 : 2, loc)],
           type: DYN,
           loc,

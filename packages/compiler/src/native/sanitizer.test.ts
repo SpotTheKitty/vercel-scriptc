@@ -33,6 +33,7 @@ const features = {
   warningReplace: false,
   stdioExtended: false,
   streamWriteErrors: false,
+  stdioWriteSlot: false,
   nodeIsland: false,
   brotli: false,
   moduleNamespace: false,

@@ -379,6 +379,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "process.envPairs": "scr_env_pairs",
   "process.stdoutWrite": "scr_process_stdout_write",
   "process.stdio": "scr_process_stdio",
+  "process.stdioSlot": "scr_process_stdio",
   "process.stdioWriteDyn": "scr_process_stdio_write_dyn",
   "process.stderrWrite": "scr_process_stderr_write",
   "process.isTTY": "scr_process_is_tty",
@@ -1869,6 +1870,11 @@ export const USES_TIMERS_LIB_FNS = new Set<string>([
   "worker.receiveMessageOnPort",
   "worker.broadcastChannel",
   "process.stdio",
+  // The typed write slot and the run-time-typed chunk write keep the loop
+  // live for the write callbacks they queue: both reach the same stream
+  // object as process.stdio and call back from a nextTick.
+  "process.stdioSlot",
+  "process.stdioWriteDyn",
   "fetch.start",
   "fetch.input",
   "fetch.function",

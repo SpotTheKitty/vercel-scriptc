@@ -1312,9 +1312,13 @@ static void scr_stdio_resize_listener(ScrStdio *stream, ScrDyn *listener, bool r
 
 #endif
 
+#ifdef SCR_STDIO_WRITE_SLOT
 /* stream.write(chunk[, encoding][, callback]) on a process output stream:
  * Node's Writable.write validation, then a synchronous descriptor write.
- * Returns +1 (true/false) or NULL with an exception pending. */
+ * Returns +1 (true/false) or NULL with an exception pending. The typed
+ * write-slot build factors it out of scr_stdio_method so the dynamic-chunk
+ * entry point below shares it; every other build keeps the method's own
+ * body, byte for byte. */
 static ScrDyn *scr_stdio_write_call(ScrStdio *stream, ScrDyn *const *args, size_t argc) {
   ScrDyn *arg = argc ? args[0] : scr_dyn_undefined();
   ScrDyn *result = NULL;
@@ -1356,6 +1360,7 @@ static ScrDyn *scr_stdio_write_call(ScrStdio *stream, ScrDyn *const *args, size_
   if (callback->kind == SCR_DYN_FUNC) scr_next_tick(scr_stdio_callback(callback, (void *)scr_stdio_write_done));
   return scr_dyn_new_bool(true);
 }
+#endif
 
 static ScrDyn *scr_stdio_method(ScrClosure *cb, ScrDyn *const *args, size_t argc) {
   int method = (int)scr_box_get_f64(cb->caps[0]);
@@ -1374,7 +1379,42 @@ static ScrDyn *scr_stdio_method(ScrClosure *cb, ScrDyn *const *args, size_t argc
     scr_dyn_arr_push(result, columns);
     scr_dyn_arr_push(result, rows);
   } else if (method == STDIO_WRITE && stream->fd != 0) {
+#ifdef SCR_STDIO_WRITE_SLOT
     result = scr_stdio_write_call(stream, args, argc);
+#else
+    ScrDyn *encoding = argc > 1 ? args[1] : scr_dyn_undefined();
+    ScrDyn *callback = argc > 2 ? args[2] : scr_dyn_undefined();
+    if (encoding->kind == SCR_DYN_FUNC) { callback = encoding; encoding = scr_dyn_undefined(); }
+    if (callback->kind != SCR_DYN_UNDEF && callback->kind != SCR_DYN_NULL && callback->kind != SCR_DYN_FUNC) {
+      scr_dyn_arg_type_fail("cb", "of type function", callback);
+      goto done;
+    }
+    ScrBytes *bytes = NULL;
+    if (arg->kind == SCR_DYN_STR) {
+      if (encoding->kind != SCR_DYN_UNDEF && encoding->kind != SCR_DYN_NULL && encoding->kind != SCR_DYN_STR) {
+        result = scr_stdio_refusal("write encoding");
+        goto done;
+      }
+      ScrStr *enc = encoding->kind == SCR_DYN_STR ? scr_str_retain(encoding->v.str) : scr_str_new("utf8", 4);
+      bytes = scr_bytes_from_str(arg->v.str, enc);
+      scr_str_release(enc);
+    } else if (arg->kind == SCR_DYN_BYTES && arg->v.bytes->elem == SCR_BYTES_U8) {
+      bytes = arg->v.bytes->shared ? scr_bytes_copy(arg->v.bytes) : scr_bytes_retain(arg->v.bytes);
+    } else {
+      scr_dyn_arg_type_fail("chunk", "of type string or an instance of Buffer, TypedArray, or DataView", arg);
+      goto done;
+    }
+    if (!bytes) goto done;
+    int error = scr_stdio_write_raw(stream->fd, bytes->data, bytes->len);
+    scr_bytes_release(bytes);
+    if (error) {
+      scr_stdio_queue_write_error(stream, callback, error);
+      result = scr_dyn_new_bool(false);
+      goto done;
+    }
+    if (callback->kind == SCR_DYN_FUNC) scr_next_tick(scr_stdio_callback(callback, (void *)scr_stdio_write_done));
+    result = scr_dyn_new_bool(true);
+#endif
   } else if (method == STDIO_ON || method == STDIO_ONCE || method == STDIO_OFF) {
     ScrDyn *listener = argc > 1 ? args[1] : scr_dyn_undefined();
     if (listener->kind != SCR_DYN_FUNC) {
@@ -1595,8 +1635,14 @@ ScrDyn *scr_process_stdio(double fd) {
       ScrClosure *cb = scr_closure_new(NULL, 1);
       cb->caps[0] = scr_box_new(SCR_BOX_F64);
       scr_box_set_f64(cb->caps[0], i);
+#ifdef SCR_STDIO_WRITE_SLOT
+      // Node's process.stdout.write is an anonymous (bound) function:
+      // .name is "" there, while the other stream methods carry their names.
       scr_stdio_methods[i] = scr_dyn_new_func(
           cb, scr_stdio_method, i == STDIO_WRITE ? 3 : 1, "", i == STDIO_WRITE ? "" : scr_stdio_names[i]);
+#else
+      scr_stdio_methods[i] = scr_dyn_new_func(cb, scr_stdio_method, i == STDIO_WRITE ? 3 : 1, "", scr_stdio_names[i]);
+#endif
     }
     scr_stdio_write_hook = scr_stdio_intercept;
   }
@@ -1612,6 +1658,7 @@ double scr_dyn_process_stdio_fd(const ScrDyn *value, const ScrDynPath *path) {
   return stream ? stream->fd : 0;
 }
 
+#ifdef SCR_STDIO_WRITE_SLOT
 /* process.stdout/stderr.write(chunk) with a run-time chunk: the stream
  * method's own validation and write, without creating the stream value
  * or installing the write hook. False with an exception pending when the
@@ -1624,6 +1671,7 @@ bool scr_process_stdio_write_dyn(double fd, ScrDyn *chunk) {
   scr_dyn_release(result);
   return accepted;
 }
+#endif
 
 /* ── the process 'exit' event ─────────────────────────────────────────
  * Listeners run SYNCHRONOUSLY when the process exits: at the end of a

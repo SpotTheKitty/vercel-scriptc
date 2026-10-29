@@ -21,6 +21,7 @@ export function executableLinkFeatures(mod: IrModule, largePages = false): Nativ
     ...(features.warningReplace ? { warningReplace: true } : {}),
     ...(features.stdioExtended ? { stdioExtended: true } : {}),
     ...(features.streamWriteErrors ? { streamWriteErrors: true } : {}),
+    ...(features.stdioWriteSlot ? { stdioWriteSlot: true } : {}),
     ...(features.nodeIsland ? { nodeIsland: true } : {}),
     ...(features.moduleNamespace ? { moduleNamespace: true } : {}),
     ...(features.moduleNamespaceDyn ? { moduleNamespaceDyn: true } : {}),

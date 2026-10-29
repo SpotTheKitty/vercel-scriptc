@@ -9214,7 +9214,7 @@ export function lowerExprStatement(lowerer: Lowerer, expr: ts.Expression): IrStm
               args: [
                 {
                   kind: "libCall",
-                  fn: "process.stdio",
+                  fn: "process.stdioSlot",
                   args: [numLit(stream === "stdout" ? 1 : 2, loc)],
                   type: DYN,
                   loc,

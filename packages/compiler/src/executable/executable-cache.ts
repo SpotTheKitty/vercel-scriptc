@@ -67,6 +67,8 @@ export interface EarlyExecutableNativeFeatures {
   stdioExtended?: boolean;
   /** Error-taking write completion callbacks: SCR_STREAM_WRITE_ERRORS. */
   streamWriteErrors?: boolean;
+  /** The process output write slot: SCR_STDIO_WRITE_SLOT. */
+  stdioWriteSlot?: boolean;
   nodeIsland?: boolean;
   moduleNamespace?: boolean;
   moduleNamespaceDyn?: boolean;

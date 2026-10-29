@@ -3668,6 +3668,11 @@ function buildLibFnSignatures() {
      * never throws. */
     "process.stdoutWrite": { argTypes: [STRING], result: BOOL },
     "process.stdio": { argTypes: [F64], result: DYN },
+    /** The same stream object, reached by the typed write-slot lowering
+     * (the write method as a value, its replacement, a patched program's
+     * typed writes): identical at run time, and the link switch for the
+     * SCR_STDIO_WRITE_SLOT build of the events unit. */
+    "process.stdioSlot": { argTypes: [F64], result: DYN },
     /** process.stdout/stderr.write(chunk) with a run-time chunk: Node's
      * Writable validation, then a synchronous write. */
     "process.stdioWriteDyn": { argTypes: [F64, DYN], result: BOOL },
