@@ -1249,16 +1249,46 @@ ScrBytes *scr_crypto_random_bytes(double n) {
 
 /* ── process.stdout/stderr.write(buf) ──────────────────────────────────── */
 
+/* Where another thread can write shared bytes (where SCR_BYTES_SNAPSHOT
+ * copies them), they are read with scr_shared_load, so no shared raw memory
+ * reaches the system call. Written to the stream itself, they go through a
+ * bounded local buffer, so a large shared view is not copied whole first.
+ * With a write hook (the program reads process.stdout or process.stderr as
+ * a value, and may have replaced its write), the view is copied whole: a
+ * replaced write receives it in one call, as in Node, whatever it returns. */
+static bool scr_stdio_write_bytes(int fd, const ScrBytes *b) {
+  size_t n = b->len * scr_bytes_elem_size(b->elem);
+#if defined(SCR_WORKERS) || (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES))
+  if (!b->shared) return scr_stdio_write(fd, b->data, n);
+  if (scr_stdio_write_hook) {
+    unsigned char *copy = scr_mem_alloc(n ? n : 1);
+    scr_shared_load(copy, b->data, n);
+    bool ok = scr_stdio_write(fd, copy, n);
+    scr_mem_free(copy);
+    return ok;
+  }
+  enum { CHUNK = 64 * 1024 };
+  unsigned char *chunk = scr_mem_alloc(n < CHUNK ? (n ? n : 1) : CHUNK);
+  for (size_t off = 0; off < n; off += CHUNK) {
+    size_t k = n - off < CHUNK ? n - off : CHUNK;
+    scr_shared_load(chunk, b->data + off, k);
+    (void)scr_stdio_write_raw(fd, chunk, k);
+  }
+  scr_mem_free(chunk);
+  return true;
+#else
+  return scr_stdio_write(fd, b->data, n);
+#endif
+}
+
 bool scr_process_stdout_write_bytes(const ScrBytes *b, const ScrStr *encoding) {
-  SCR_BYTES_SNAPSHOT(b);
   (void)encoding;
-  return scr_stdio_write(1, b->data, b->len * scr_bytes_elem_size(b->elem));
+  return scr_stdio_write_bytes(1, b);
 }
 
 bool scr_process_stderr_write_bytes(const ScrBytes *b, const ScrStr *encoding) {
-  SCR_BYTES_SNAPSHOT(b);
   (void)encoding;
-  return scr_stdio_write(2, b->data, b->len * scr_bytes_elem_size(b->elem));
+  return scr_stdio_write_bytes(2, b);
 }
 
 /* Buffer.from over checked-native input. Strings use the existing codec;
