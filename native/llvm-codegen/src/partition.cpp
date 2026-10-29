@@ -256,22 +256,26 @@ void balanceRoots(std::vector<Symbol> &Symbols, ArrayRef<unsigned> Roots,
     if (!EntryRoots.contains(Root) && RootBytes[Root] >= Unit &&
         RootBytes[Root] * 2 <= Cap)
       Place(Root);
-  // Roots under one unit (runtime helpers, mostly) go to the first open
-  // partition from their names' whose load from the larger roots leaves
-  // room, and count in no load: where a helper goes depends only on the
-  // larger roots, so a helper that an edit adds or removes moves no other
-  // root.
+  // Roots under one unit (runtime helpers, mostly) count in no load of the
+  // larger roots, so a helper that an edit adds or removes moves no larger
+  // root. Each goes to the first open partition from its name's whose load,
+  // the helpers placed there included, is below the cap, or else to its
+  // name's: the helpers fill the partitions with room, and once those are
+  // full they spread by name instead of gathering in one partition (which
+  // could then hold most of the module and have it optimized whole).
+  std::vector<uint64_t> SmallLoad(Count, 0);
   for (unsigned Root : Order)
     if (!EntryRoots.contains(Root) && RootBytes[Root] < Unit) {
       unsigned Home = stableHash(Symbols[Root].Name) % Count;
       unsigned Chosen = FirstOpen(Home);
       for (unsigned K = 0; K < Count; ++K) {
         unsigned P = (Home + K) % Count;
-        if (!Closed[P] && Load[P] < Cap) {
+        if (!Closed[P] && Load[P] + SmallLoad[P] < Cap) {
           Chosen = P;
           break;
         }
       }
+      SmallLoad[Chosen] += RootBytes[Root];
       Placed[Root] = Chosen;
     }
   for (unsigned I = 0; I < Symbols.size(); ++I)

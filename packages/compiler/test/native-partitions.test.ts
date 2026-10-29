@@ -940,6 +940,66 @@ describe.runIf(helper !== null)("LLVM program partitions", () => {
     expect(changed.length).toBeLessThanOrEqual(2);
   });
 
+  test("small helpers spread when one partition is left below the cap", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scriptc-partitions-small-spread-"));
+    dirs.push(dir);
+    // Three exported functions of about 16 KiB, each over the cap of four
+    // partitions, whose names hash to partitions 3, 0 and 1, and forty
+    // exported helpers of about 2.5 KiB. Partition 2 is the only one left
+    // below the cap; counted only against the larger roots' loads, every
+    // helper would go there.
+    const chain = (header: string, lines: number) => [
+      header,
+      ...Array.from(
+        { length: lines },
+        (_, step) => `  %v${step} = add i64 ${step === 0 ? "%value" : `%v${step - 1}`}, 1`,
+      ),
+      `  ret i64 %v${lines - 1}`,
+      "}",
+    ];
+    const helpers = 40;
+    const lines: string[] = [];
+    for (let index = 0; index < 3; index++)
+      lines.push(...chain(`define i64 @big${index}(i64 %value) noinline {`, 640));
+    for (let index = 0; index < helpers; index++)
+      lines.push(...chain(`define i64 @helper${index}(i64 %value) noinline {`, 100));
+    lines.push("define i32 @main() {");
+    const calls = [
+      ...[0, 1, 2].map((i) => `big${i}`),
+      ...Array.from({ length: helpers }, (_, i) => `helper${i}`),
+    ];
+    calls.forEach((name, index) =>
+      lines.push(
+        `  %r${index} = call i64 @${name}(i64 ${index})`,
+        `  %s${index} = add i64 ${index === 0 ? "0" : `%s${index - 1}`}, %r${index}`,
+      ),
+    );
+    lines.push(
+      `  %low = urem i64 %s${calls.length - 1}, 251`,
+      "  %code = trunc i64 %low to i32",
+      "  ret i32 %code",
+      "}",
+    );
+    let total = 3 * 640 + helpers * 100;
+    calls.forEach((_, index) => (total += index));
+    const objects = await emit(dir, lines.join("\n") + "\n", {
+      outputs: 4,
+      optLevel: "0",
+      name: "spread",
+    });
+    expect(await exitCode(dir, objects, "spread")).toBe(total % 251);
+    const homes = new Map<number, number>();
+    for (const [index, object] of objects.entries()) {
+      const { stdout } = await execFileAsync("nm", ["--defined-only", object]);
+      for (const line of stdout.split("\n"))
+        if (/^[0-9a-fA-F]+ [A-Za-z] _?helper\d+$/.test(line.trim()))
+          homes.set(index, (homes.get(index) ?? 0) + 1);
+    }
+    expect([...homes.values()].reduce((sum, count) => sum + count, 0)).toBe(helpers);
+    expect(Math.max(...homes.values())).toBeLessThan(helpers);
+    expect(homes.size).toBeGreaterThan(1);
+  });
+
   test("a table written one element per line keeps the text partitioner and its reuse", async () => {
     const dir = await mkdtemp(join(tmpdir(), "scriptc-partitions-table-"));
     dirs.push(dir);
