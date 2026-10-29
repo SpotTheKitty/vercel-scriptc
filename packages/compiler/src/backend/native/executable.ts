@@ -84,6 +84,9 @@ import {
   vendorBuildCacheRoot,
   tlsArchivePath,
   brotliArchivePath,
+  ensureIcuSources,
+  icuArchivePath,
+  ensureIcuArchive,
   lreObjectPaths,
   zlibObjectPaths,
   stageVendorInputs,
@@ -124,6 +127,9 @@ interface RuntimeUnitContext {
   zlibObjects: readonly string[];
   tlsArchive: string | null;
   brotliArchive: string | null;
+  icuArchive: string | null;
+  /** The fetched ICU release root, for scr_intl.c's headers. */
+  icuSourceDir: string | null;
 }
 
 /** An optional runtime input: runtime sources compiled when `when` holds,
@@ -244,6 +250,23 @@ const RUNTIME_UNITS: readonly RuntimeUnit[] = [
           u.brotliArchive,
         ]
       : [],
+  ),
+  // Intl over ICU (scr_intl.c): ICU's C API only, at the default locale,
+  // reading its data file from beside the executable. The ICU headers are
+  // ICU's own source tree (common/unicode/*.h for the core API, and
+  // i18n/unicode/*.h for udat.h and unumberformatter.h), so the include
+  // paths are vendor inputs rather than a copied header set.
+  unitArgs((u) =>
+    u.icuSourceDir === null || u.icuArchive === null
+      ? []
+      : [
+          "-I",
+          join(u.icuSourceDir, "source", "common"),
+          "-I",
+          join(u.icuSourceDir, "source", "i18n"),
+          u.rt(join(u.rtDir, "scr_intl.c")),
+          u.icuArchive,
+        ],
   ),
   unit((u) => u.opts.events, "scr_events.c", "scr_readline.c"),
   // readline's terminal mode: rl.terminal sets the regex unit it
@@ -447,6 +470,7 @@ export async function compileCInternal(
   const pki = opts.pki ?? false;
   const mbedtls = tls || cipher || ecdh || dh || pki;
   const brotli = (opts.zlib ?? false) && opts.brotli === true;
+  const icu = opts.intl ?? false;
   const driver = resolveCc();
   const darwinDebugSymbols = needsDarwinDebugSymbols(
     targetPlatform(driver),
@@ -689,6 +713,8 @@ export async function compileCInternal(
   let brotliArchive = brotli
     ? brotliArchivePath(sanitize, driver, vendorBuildIdentity, vendorCacheRoot)
     : null;
+  let icuArchive = icu ? icuArchivePath(driver, vendorBuildIdentity, vendorCacheRoot) : null;
+  let icuSourceDir: string | null = null;
 
   // ours would collide; see scr_regex.c) — the standalone objects are for
   // static builds only.
@@ -742,6 +768,19 @@ export async function compileCInternal(
           ? await materialize()
           : await stageVendorInputs(materialize, join(stageRoot, "brotli"));
       brotliArchive = paths[0]!;
+    }
+    if (icu) {
+      const cachedArchive = icuArchivePath(driver, vendorBuildIdentity, materializeCacheRoot);
+      protectCachedArtifact(cacheWarmPaths, cachedArchive);
+      const materialize = async (): Promise<string[]> => [
+        await ensureIcuArchive(driver, vendorBuildIdentity, materializeCacheRoot),
+      ];
+      const paths =
+        stageRoot === undefined
+          ? await materialize()
+          : await stageVendorInputs(materialize, join(stageRoot, "icu"));
+      icuArchive = paths[0]!;
+      icuSourceDir = await ensureIcuSources(materializeCacheRoot);
     }
     if (regex) {
       for (const object of lreObjectPaths(
@@ -830,6 +869,8 @@ export async function compileCInternal(
       zlibObjects,
       tlsArchive,
       brotliArchive,
+      icuArchive,
+      icuSourceDir,
     }),
     // A .ll program TU (the LLVM backend) deliberately carries no target
     // triple (byte-stable output; clang supplies the host/SCRIPTC_TARGET
