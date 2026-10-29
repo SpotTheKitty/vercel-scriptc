@@ -1936,7 +1936,12 @@ function flatMapUnionHelper(
     if (plan.arms[tag] === "empty") return [];
     if (plan.arms[tag] === "tuple") {
       const tuple = arm as IrType & { kind: "record" };
-      return (lowerer.shapes.get(tuple.shapeId)?.fields ?? []).map((field) => {
+      // The fields are stored by name ("0", "1", "10", "2", …): the
+      // elements append in index order.
+      const elements = [...(lowerer.shapes.get(tuple.shapeId)?.fields ?? [])].sort(
+        (a, b) => Number(a.name) - Number(b.name),
+      );
+      return elements.map((field) => {
         const read: IrExpr = {
           kind: "recordGet",
           obj: narrowed,

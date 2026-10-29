@@ -4334,13 +4334,25 @@ function typeParameterReceiver(t: ts.Type): boolean {
 }
 
 /** Whether `access` is only READ (not the target of an assignment, a
- * delete, or an increment). */
+ * delete, or an increment). The left operand of `??`, `===` or `&&`, and
+ * the operand of `!`, `-` or `typeof`, are reads. */
 function readOnlyAccess(access: ts.PropertyAccessExpression): boolean {
   const parent = access.parent;
   if (parent === undefined) return true;
-  if (ts.isBinaryExpression(parent) && parent.left === access) return false;
+  if (
+    ts.isBinaryExpression(parent) &&
+    parent.left === access &&
+    parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+    parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+  )
+    return false;
   if (ts.isDeleteExpression(parent)) return false;
-  return !ts.isPrefixUnaryExpression(parent) && !ts.isPostfixUnaryExpression(parent);
+  if (ts.isPostfixUnaryExpression(parent)) return false;
+  return (
+    !ts.isPrefixUnaryExpression(parent) ||
+    (parent.operator !== ts.SyntaxKind.PlusPlusToken &&
+      parent.operator !== ts.SyntaxKind.MinusMinusToken)
+  );
 }
 
 export function fieldTarget(
