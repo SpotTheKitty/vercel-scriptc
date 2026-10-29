@@ -455,8 +455,8 @@ function scanDroppedPackages(
       return at !== null && wanted.has(at.name);
     });
     const scanned = scanFiles(load.program, files, { userJs: false, dropped: true, edges: true });
-    into.modules.push(...scanned.modules);
-    into.edges.push(...scanned.edges);
+    for (const module of scanned.modules) into.modules.push(module);
+    for (const edge of scanned.edges) into.edges.push(edge);
   } catch {
     /* report-only detection */
   }

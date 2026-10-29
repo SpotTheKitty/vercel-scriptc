@@ -9624,9 +9624,9 @@ export class Lowerer {
     // array-HOF loop functions, which ride the same list), and the
     // implicit-any instances lowered eagerly at their first call sites.
     this.settleSharedHelperLocations([...functions, ...this.liftedFns, ...this.implicitFns]);
-    functions.push(...this.liftedFns);
-    functions.push(...this.implicitFns);
-    functions.push(...runtimeClassConstructs(this, functions));
+    for (const fn of this.liftedFns) functions.push(fn);
+    for (const fn of this.implicitFns) functions.push(fn);
+    for (const fn of runtimeClassConstructs(this, functions)) functions.push(fn);
 
     if (this.remainder) {
       // Deferred collection diagnostics nothing flushed — declarations no
@@ -9912,9 +9912,11 @@ export class Lowerer {
   private reportBlockedBody(decl: ts.FunctionDeclaration): void {
     const diags = blockedBodyDiagnostics(this, decl);
     const symbol = declSymbolOf(this, decl);
-    if (symbol && this.alreadyFlushed.has(symbol))
-      this.reachedBlockedBodyDiagnostics.push(...diags);
-    else for (const d of diags) this.pushDiag(d);
+    if (symbol && this.alreadyFlushed.has(symbol)) {
+      for (const d of diags) this.reachedBlockedBodyDiagnostics.push(d);
+    } else {
+      for (const d of diags) this.pushDiag(d);
+    }
   }
 
   /** Whether run() counts a signature-blocked declaration in
@@ -10525,7 +10527,7 @@ export class Lowerer {
       ...byName(this.liftedFns),
       ...byName(this.implicitFns),
     ];
-    functions.push(...runtimeClassConstructs(this, functions));
+    for (const fn of runtimeClassConstructs(this, functions)) functions.push(fn);
     if (this.regexGroupResults) for (const fn of functions) foldRegexSpanReads(this, fn);
     // The worklist can leave a virtual site with a single implementation.
     // Devirtualize after construction/override reachability has settled.
@@ -10730,10 +10732,10 @@ export class Lowerer {
     }
     const captured = this.diags.splice(diagsBefore);
     if (captured.some((d) => d.code === "SC9001")) {
-      this.diags.push(...captured);
+      for (const d of captured) this.diags.push(d);
       return null;
     }
-    this.runtimeFences.push(...captured);
+    for (const d of captured) this.runtimeFences.push(d);
 
     const fence = this.runtimeFenceStmt(captured[0], node, target.fallback, target.bareMessage);
     const loc = locOf(node);
@@ -11022,7 +11024,7 @@ export class Lowerer {
       .slice(diagsBefore)
       .filter((d) => d.rejects !== undefined || this.loweredOnceDiags.has(d));
     this.diags.length = diagsBefore;
-    this.diags.push(...kept);
+    for (const d of kept) this.diags.push(d);
   }
 
   /** A unit that still fails after its retries commits its first
@@ -11035,7 +11037,8 @@ export class Lowerer {
       d.rejects !== undefined || this.loweredOnceDiags.has(d);
     const kept = this.diags.slice(diagsBefore).filter(carried);
     this.diags.length = diagsBefore;
-    this.diags.push(...first.filter((d) => !carried(d)), ...kept);
+    for (const d of first) if (!carried(d)) this.diags.push(d);
+    for (const d of kept) this.diags.push(d);
   }
 
   /** Lowers one unit whose body-level poison skips it (a generic
