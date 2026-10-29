@@ -1043,6 +1043,27 @@ export function lowerIdentifierExpr(lowerer: Lowerer, expr: ts.Identifier, loc: 
       );
     }
   }
+  // A `.js` READ of a name NOTHING declares. Node resolves such a name at
+  // run time: the access throws the catchable `ReferenceError: <name> is not
+  // defined` (a `typeof` test lowers earlier, in expressions/typeof.ts, and
+  // answers "undefined" — exactly Node's rule), so the read compiles to that
+  // throw and never yields a value. The value is checked-dynamic (the
+  // checker's error-any), which every use site carries or fences — and the
+  // read always unwinds before any of them observes it. A WRITE to the same
+  // name is not a read: it reaches rejectUnresolved and its SC1091 story.
+  // Typed sources keep the compile error (preflight's JS relaxation is
+  // `isJsSourceFileName`-gated, so no TS file reaches this branch).
+  // In shorthand position (`{ x }`) `resolveValueSymbol` answers the
+  // PROPERTY symbol, so the declaration test there is the checker's
+  // shorthand-VALUE symbol.
+  const parent = expr.parent;
+  const undeclared =
+    parent !== undefined && ts.isShorthandPropertyAssignment(parent) && parent.name === expr
+      ? lowerer.checker.getShorthandAssignmentValueSymbol(parent) === undefined
+      : lowerer.resolveValueSymbol(expr) === null;
+  if (undeclared && isJsSourceFile(ts.getSourceFileOfNode(expr))) {
+    return nsUndefRead(lowerer, expr.text, expr, contextualUndefReadType(lowerer, expr) ?? DYN);
+  }
   // Preflight guarantees no unresolved identifiers; anything else here
   // is a blocked declaration's binding (the SC2004 cascade) or a
   // binding form we don't model yet.
