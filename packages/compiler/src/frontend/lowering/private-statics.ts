@@ -14,6 +14,7 @@ import { hasStaticThis } from "./static-this.js";
 import type { Lowerer } from "./lowerer.js";
 import { lowerClassStaticRead, lowerStaticMethodCall, type ClassInfo } from "./lower-classes.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
+import { omittedArgFor } from "./call-arguments.js";
 
 /** How a static private name is used: a field read or write, or a method
  * (or accessor) read or call. V8 words each failure differently. */
@@ -193,10 +194,11 @@ export function lowerStaticPrivateCall(
   const name = access.name.text;
   const found = lowerer.findStaticOn(info, name);
   if (!found) unsupportedStaticPrivate(lowerer, call, name);
-  if (found.field !== undefined) return null;
   const value = checkedDynamicReceiver(lowerer, access.expression);
   if (!value) return null;
   const loc = locOf(call);
+  if (found.field !== undefined)
+    return lowerStaticPrivateFieldCall(lowerer, call, info, name, found.field, value);
   const brand = staticPrivateBrandCheck(lowerer, info, "method", name, value, loc);
   let result: IrExpr | null;
   if (access.expression.kind === ts.SyntaxKind.ThisKeyword) {
@@ -247,6 +249,62 @@ export function lowerStaticPrivateCall(
   };
 }
 
+/** `R.#f(args)` for a function-valued static private field on a
+ * checked-dynamic receiver: the receiver, the brand check (PrivateGet's),
+ * then a call through the field's value with `this` bound to the receiver,
+ * as JavaScript calls a private field's function. */
+function lowerStaticPrivateFieldCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  info: ClassInfo,
+  name: string,
+  field: ClassInfo["staticFields"][number],
+  value: IrExpr,
+): IrExpr {
+  const fieldType = field.type;
+  if (fieldType.kind !== "func") {
+    return lowerer.unsupported(
+      "SC1090",
+      call,
+      `calling the private static field '${name}' when it does not hold a function of a known type`,
+    );
+  }
+  const loc = locOf(call);
+  const receiver = lowerer.declareHiddenLocal("%staticPrivateReceiver", DYN);
+  const args = call.arguments.nodes.map((arg, index) =>
+    lowerer.lowerExprExpecting(arg, fieldType.params[index]),
+  );
+  for (let index = args.length; index < fieldType.params.length; index++) {
+    const absent = omittedArgFor(lowerer, fieldType.params[index]!, loc);
+    if (!absent) {
+      lowerer.unsupported(
+        "SC1090",
+        call,
+        "calls omitting a non-optional parameter of the callee's type",
+      );
+    }
+    args.push(absent);
+  }
+  const result: IrExpr = {
+    kind: "callValue",
+    callee: varRef(field.globalId, fieldType, loc),
+    receiver: varRef(receiver.id, DYN, loc),
+    args,
+    type: fieldType.ret,
+    loc,
+  };
+  return {
+    kind: "seqExpr",
+    stmts: [
+      { kind: "varDecl", localId: receiver.id, init: value, loc },
+      staticPrivateBrandCheck(lowerer, info, "read", name, varRef(receiver.id, DYN, loc), loc),
+    ],
+    result,
+    type: result.type,
+    loc,
+  };
+}
+
 /** `R.#x = v` for a static private field on a checked-dynamic receiver:
  * the receiver, then the value, then the brand check (PrivateSet checks
  * after the right side runs), then the native global. */
@@ -293,5 +351,29 @@ export function lowerStaticPrivateAssignment(
     result: varRef(assigned.id, found.field.type, loc),
     type: found.field.type,
     loc,
+  };
+}
+
+/** The update target of `R.#x++`, `--R.#x` or `R.#x op= v` for a static
+ * private field on a checked-dynamic receiver: the brand check, which runs
+ * where PrivateGet reads the old value (before the right side), and the
+ * field's native global. The write after it needs no second check: the
+ * receiver already passed. Null for other targets. */
+export function staticPrivateUpdateTarget(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+): { brand: IrStmt; target: { id: string; type: IrType } } | null {
+  if (!ts.isPrivateIdentifier(access.name) || access.questionDotToken) return null;
+  const info = staticPrivateOwner(lowerer, access.name);
+  if (!info || !info.runtimeStatics) return null;
+  if (lowerer.exactClassOfReceiver(access.expression) === info) return null;
+  const name = access.name.text;
+  const found = lowerer.findStaticOn(info, name);
+  if (!found?.field) unsupportedStaticPrivate(lowerer, access, name);
+  const value = checkedDynamicReceiver(lowerer, access.expression);
+  if (!value) return null;
+  return {
+    brand: staticPrivateBrandCheck(lowerer, info, "read", name, value, locOf(access)),
+    target: { id: found.field.globalId, type: found.field.type },
   };
 }

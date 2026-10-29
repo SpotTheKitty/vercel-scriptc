@@ -117,3 +117,50 @@ for (const other of [{}, 1, undefined]) {
 Generators.agen(4)
   .next()
   .then((step) => console.log("async generator", step.value, step.done));
+
+// A function-valued private static field called through `this` runs with
+// `this` bound to the receiver; a receiver other than the class throws the
+// field read's TypeError.
+class Calls {
+  static #fn = function (a) {
+    return (this === Calls ? "self " : "other ") + a;
+  };
+  static #arrow = (a) => "arrow " + a;
+  static get viaGetter() {
+    return this.#fn(2) + " " + this.#arrow(2);
+  }
+  static viaOther(other, a) {
+    return other.#fn(a);
+  }
+  static get fn() {
+    return this.#fn;
+  }
+}
+console.log("field call", Calls.viaGetter, Calls.viaOther(Calls, 3));
+try {
+  Calls.viaOther({}, 4);
+} catch (error) {
+  console.log("field call", error.constructor.name, error.message);
+}
+
+// Updates of a private static field through `this` update its storage.
+class Updates {
+  static #n = 1;
+  static #s = "a";
+  static get bump() {
+    const a = this.#n++;
+    const b = ++this.#n;
+    const c = this.#n--;
+    this.#n += 10;
+    const d = (this.#n *= 2);
+    this.#s += "b";
+    return [a, b, c, d, this.#n, this.#s].join(",");
+  }
+}
+console.log("updates", Updates.bump, Updates.bump, Object.hasOwn(Updates, "#n"));
+class SubUpdates extends Updates {}
+try {
+  SubUpdates.bump;
+} catch (error) {
+  console.log("updates", error.constructor.name, error.message);
+}

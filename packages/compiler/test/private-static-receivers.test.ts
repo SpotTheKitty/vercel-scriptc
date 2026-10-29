@@ -67,3 +67,34 @@ test("the declaring class's own name reads native storage without a check", asyn
   expect(ir.functions.some((name) => name.startsWith("%private.static."))).toBe(false);
   expect(ir.keys).toEqual([]);
 });
+
+test("a function-valued static private field called through `this` calls the stored function", async () => {
+  const ir = await lowered(
+    `class C {
+      static #fn = function (a) { return a + 1; };
+      static get viaGetter() { return this.#fn(1); }
+    }
+    console.log(C.viaGetter);
+    `,
+  );
+  expect(ir.callees).toContain("%private.static.read:C:#fn");
+  expect(ir.keys).toEqual([]);
+});
+
+test("updates of a static private field through `this` check the brand and keep native storage", async () => {
+  const ir = await lowered(
+    `class C {
+      static #n = 1;
+      static get bump() {
+        this.#n++;
+        --this.#n;
+        this.#n += 2;
+        return this.#n;
+      }
+    }
+    console.log(C.bump);
+    `,
+  );
+  expect(ir.callees).toContain("%private.static.read:C:#n");
+  expect(ir.keys).toEqual([]);
+});
