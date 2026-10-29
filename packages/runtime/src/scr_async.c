@@ -3764,9 +3764,10 @@ static DWORD WINAPI scr_fs_rename_worker(LPVOID payload) {
 #else
 static void *scr_fs_rename_worker(void *payload) {
   (void)payload;
-  /* A pool thread keeps SIGPIPE and SIGXFSZ blocked: its file writes then
-   * report EPIPE and EFBIG without changing the signal mask per write
-   * (scr_fs_write_once). */
+#ifdef SCR_LIB
+  /* In a library, a pool thread keeps SIGPIPE and SIGXFSZ blocked: its file
+   * writes then report EPIPE and EFBIG without changing the signal mask per
+   * write (scr_fs_write_once). Executables ignore both signals (scr_init). */
   sigset_t write_set;
   sigemptyset(&write_set);
 #ifdef SIGPIPE
@@ -3776,6 +3777,7 @@ static void *scr_fs_rename_worker(void *payload) {
   sigaddset(&write_set, SIGXFSZ);
 #endif
   (void)pthread_sigmask(SIG_BLOCK, &write_set, NULL);
+#endif
   scr_fs_rename_worker_loop();
   return NULL;
 }
