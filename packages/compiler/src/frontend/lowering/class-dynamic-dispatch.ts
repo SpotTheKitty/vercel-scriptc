@@ -93,6 +93,96 @@ import { protocolArm, protocolFieldArm } from "./class-protocol-dispatch.js";
 import { STREAM_OPERATORS, operatorSignalOptions, reduceSignalSetup } from "./lower-stream.js";
 import { deletedPropertyNames, fixedFieldFamily } from "./js-class-fields.js";
 
+/** Methods that builtin prototypes define (arrays, strings, collections,
+ * promises, functions, regular expressions, iterators, Object.prototype):
+ * a call of one of these names through an untyped receiver keeps the
+ * runtime's method dispatch, which answers them, even when a class
+ * declares a getter of the same name. */
+const BUILTIN_METHOD_NAMES: ReadonlySet<string> = new Set([
+  "add",
+  "apply",
+  "at",
+  "bind",
+  "call",
+  "catch",
+  "charAt",
+  "charCodeAt",
+  "clear",
+  "codePointAt",
+  "concat",
+  "copyWithin",
+  "delete",
+  "endsWith",
+  "entries",
+  "every",
+  "exec",
+  "fill",
+  "filter",
+  "finally",
+  "find",
+  "findIndex",
+  "findLast",
+  "findLastIndex",
+  "flat",
+  "flatMap",
+  "forEach",
+  "get",
+  "has",
+  "hasOwnProperty",
+  "includes",
+  "indexOf",
+  "isPrototypeOf",
+  "join",
+  "keys",
+  "lastIndexOf",
+  "localeCompare",
+  "map",
+  "match",
+  "matchAll",
+  "next",
+  "normalize",
+  "padEnd",
+  "padStart",
+  "pop",
+  "propertyIsEnumerable",
+  "push",
+  "reduce",
+  "reduceRight",
+  "repeat",
+  "replace",
+  "replaceAll",
+  "return",
+  "reverse",
+  "search",
+  "set",
+  "shift",
+  "slice",
+  "some",
+  "sort",
+  "splice",
+  "split",
+  "startsWith",
+  "substr",
+  "substring",
+  "test",
+  "then",
+  "throw",
+  "toLocaleString",
+  "toLowerCase",
+  "toReversed",
+  "toSorted",
+  "toSpliced",
+  "toString",
+  "toUpperCase",
+  "trim",
+  "trimEnd",
+  "trimStart",
+  "unshift",
+  "valueOf",
+  "values",
+  "with",
+]);
+
 const STREAM_METHODS = new Set([
   "on",
   "addListener",
@@ -1897,6 +1987,64 @@ export class ClassDynamicDispatch {
       byMethod.set(method, matching);
       return matching;
     };
+    // A name some class declares as a getter, and no class as a method: the
+    // call reads the member (running the getter) before it evaluates the
+    // arguments, as JavaScript reads the callee first, and then calls what
+    // it read. The runtime reads fields and other own properties of class
+    // instances that early itself (scr_dyn_prepare_method).
+    const getterReceiver = (method: string): boolean =>
+      !BUILTIN_METHOD_NAMES.has(method) &&
+      this.propertyReceivers(lowerer, true).some(({ info }) =>
+        findMethodOn(lowerer, info, `get:${method}`),
+      );
+    const getterCall = (fn: IrFunction, invoke: IrExpr & { kind: "dynInvoke" }): IrExpr => {
+      const loc = invoke.loc;
+      const receiverLocal = {
+        id: `%dispatch.receiver.${fn.locals.length}`,
+        name: "receiver",
+        type: DYN,
+        mutable: false,
+      };
+      fn.locals.push(receiverLocal);
+      const calleeLocal = {
+        id: `%dispatch.callee.${fn.locals.length}`,
+        name: "callee",
+        type: DYN,
+        mutable: false,
+      };
+      fn.locals.push(calleeLocal);
+      const receiver = varRef(receiverLocal.id, DYN, loc);
+      return {
+        kind: "seqExpr",
+        stmts: [
+          { kind: "varDecl", localId: receiverLocal.id, init: invoke.recv, loc },
+          {
+            kind: "varDecl",
+            localId: calleeLocal.id,
+            init: {
+              kind: "dynKeyGet",
+              key: { kind: "strLit", value: invoke.method, type: STRING, loc },
+              value: receiver,
+              type: DYN,
+              loc,
+            },
+            loc,
+          },
+        ],
+        result: {
+          kind: "dynCall",
+          callee: varRef(calleeLocal.id, DYN, loc),
+          receiver,
+          calleeName: invoke.calleeName,
+          ...(invoke.calleeNameValue ? { calleeNameValue: invoke.calleeNameValue } : {}),
+          args: invoke.args,
+          type: DYN,
+          loc,
+        },
+        type: DYN,
+        loc,
+      };
+    };
     const candidateSets = new Map<string, ReadonlySet<ClassInfo>>();
     const candidateSet = (method: string): ReadonlySet<ClassInfo> => {
       let set = candidateSets.get(method);
@@ -2964,6 +3112,14 @@ export class ClassDynamicDispatch {
               const info = lowerer.classes.get(name);
               return info && findStaticOn(lowerer, info, method)?.method;
             });
+          if (
+            invoke &&
+            expr.kind === "dynInvoke" &&
+            candidates(invoke.method).length === 0 &&
+            !staticCandidates(invoke.method) &&
+            getterReceiver(invoke.method)
+          )
+            return getterCall(fn, expr);
           if (
             !invoke ||
             (candidates(invoke.method).length === 0 &&
