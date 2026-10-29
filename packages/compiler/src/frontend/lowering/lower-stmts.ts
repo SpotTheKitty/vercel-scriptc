@@ -961,8 +961,8 @@ function lowerOneStatement(
   if (deferFences && lowerer.diagSink === null && lowerer.diags.length > diagsBefore) {
     const flushed = lowerer.diags.splice(diagsBefore);
     const ice = flushed.filter((d) => d.code === "SC9001");
-    lowerer.diags.push(...ice);
-    lowerer.runtimeFences.push(...flushed.filter((d) => d.code !== "SC9001"));
+    for (const d of ice) lowerer.diags.push(d);
+    for (const d of flushed) if (d.code !== "SC9001") lowerer.runtimeFences.push(d);
   }
 }
 
@@ -1222,7 +1222,10 @@ export function predeclareForwardFnDecl(lowerer: Lowerer, symbol: ts.Symbol): bo
       entry.out.push(lowerer.lowerNestedFunctionDecl(decl));
     } catch (e) {
       entry.ctx.hoistedFnDecls.delete(decl);
-      if (previousSink !== null) previousSink.push(...lowerer.diags.splice(diagsBefore));
+      if (previousSink !== null) {
+        const flushed = lowerer.diags.splice(diagsBefore);
+        for (const d of flushed) previousSink.push(d);
+      }
       throw e;
     } finally {
       lowerer.diagSink = previousSink;
