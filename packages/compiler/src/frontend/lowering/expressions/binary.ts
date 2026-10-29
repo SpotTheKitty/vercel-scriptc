@@ -1,4 +1,5 @@
 /* Binary operators: arithmetic, comparisons and equality, logical and nullish pairs, and string conversion for concatenation. */
+import { lowerStaticPrivateAssignment } from "../private-statics.js";
 import { keyedHelperName } from "../stable-names.js";
 import * as ts from "../../ts7/adapter.js";
 import {
@@ -632,7 +633,11 @@ export function lowerNativeFunctionAssignment(
   const classType = storedClassValueType(lowerer, target.expression);
   const staticClass =
     classType?.kind === "classval" ? lowerer.classes.get(classType.className) : undefined;
-  if (staticClass && hasRuntimeStatics(staticClass)) {
+  if (
+    staticClass &&
+    hasRuntimeStatics(staticClass) &&
+    !(ts.isPropertyAccessExpression(target) && ts.isPrivateIdentifier(target.name))
+  ) {
     return lowerDynMemberAssignment(
       lowerer,
       expr,
@@ -1110,6 +1115,8 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     if (op === ts.SyntaxKind.EqualsToken) {
       const prototypeWrite = lowerClassPrototypeComputedAssignment(lowerer, expr);
       if (prototypeWrite) return prototypeWrite;
+      const staticPrivateWrite = lowerStaticPrivateAssignment(lowerer, expr);
+      if (staticPrivateWrite) return staticPrivateWrite;
       const callableWrite = lowerNativeFunctionAssignment(lowerer, expr);
       if (callableWrite) return callableWrite;
       const dereferenced = lowerDereferencedElementAssignment(lowerer, expr);

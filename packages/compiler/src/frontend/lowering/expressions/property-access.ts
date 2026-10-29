@@ -1,4 +1,5 @@
 import { widensReducedRecords } from "../function-returns.js";
+import { lowerStaticPrivateRead } from "../private-statics.js";
 import { widthNarrowHelper } from "../coercions/unions.js";
 /* Property reads (`a.b`): lowerExprInner's property-access branch, intrinsic and union properties, field reads and targets, and match-group reads. */
 import { jsSpecialGlobalValue } from "../global-values.js";
@@ -344,6 +345,12 @@ export function lowerPropertyAccessExpr(
 ): IrExpr {
   const arrayClassConstructor = lowerArrayClassConstructorRead(lowerer, expr, loc);
   if (arrayClassConstructor !== null) return arrayClassConstructor;
+  // `R.#x` for a static private on a checked-dynamic receiver: the brand
+  // check, then the native storage (private-statics.ts).
+  {
+    const staticPrivate = lowerStaticPrivateRead(lowerer, expr, loc);
+    if (staticPrivate) return staticPrivate;
+  }
   // `value.#x` on a checked-dynamic value, or on a checked extraction of
   // one: the field of the brand-checked receiver (checkedPrivateValue).
   if (ts.isPrivateIdentifier(expr.name)) {

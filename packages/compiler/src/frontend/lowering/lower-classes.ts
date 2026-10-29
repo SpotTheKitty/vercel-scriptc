@@ -2453,9 +2453,15 @@ export function collectClassShapeInner(
               (modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword,
             ),
         )) &&
+      // A private static ACCESSOR has no native storage yet, and a private
+      // static method that reads `arguments` would lose the arguments past
+      // its parameters when called through its value (`this.#m` returned by
+      // a getter): keep such a class on the static path, whose public
+      // static accessors refuse.
       !decl.members.nodes.some(
         (member) =>
-          member.name &&
+          (ts.isAccessor(member) ||
+            (ts.isMethodDeclaration(member) && bodyReadsArguments(member))) &&
           ts.isPrivateIdentifier(member.name) &&
           ts
             .getModifiers(member)
@@ -2524,8 +2530,22 @@ export function collectClassShapeInner(
             .getModifiers(member)
             ?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword))
       ) {
-        runtimeStatics.push(member);
-        continue;
+        // A private static of a declaration-level class keeps its native
+        // storage (the %C.static:#m function, the %g.s.C.#x global): the
+        // constructor object never carries a property for it, and every
+        // access brand-checks its receiver (private-statics.ts). A field
+        // also stays in runtimeStatics, so its initializer runs in source
+        // order with the constructor's other initializers.
+        const privateStatic =
+          checkedStatics &&
+          !functionLocalClass(decl) &&
+          (member as { name?: ts.PropertyName }).name !== undefined &&
+          ts.isPrivateIdentifier((member as { name: ts.PropertyName }).name);
+        if (!privateStatic) {
+          runtimeStatics.push(member);
+          continue;
+        }
+        if (ts.isPropertyDeclaration(member)) runtimeStatics.push(member);
       }
       if (
         functionLocalClass(decl) &&
@@ -5140,11 +5160,15 @@ function lowerStaticFieldInitsInner(lowerer: Lowerer, info: ClassInfo): IrStmt[]
     | { pos: number; kind: "field"; f: ClassInfo["staticFields"][number] }
     | { pos: number; kind: "block"; b: ts.ClassStaticBlockDeclaration };
   const items: Item[] = [
-    ...info.staticFields.map((f): Item => ({
-      pos: ts.tokenStartOfNode(f.initializer),
-      kind: "field",
-      f,
-    })),
+    // A runtime-statics class initializes its private static fields with
+    // its other initializers (initializeRuntimeStatics).
+    ...info.staticFields
+      .filter((f) => !(info.runtimeStatics && f.name.startsWith("#")))
+      .map((f): Item => ({
+        pos: ts.tokenStartOfNode(f.initializer),
+        kind: "field",
+        f,
+      })),
     ...(info.staticBlocks ?? []).map((b): Item => ({
       pos: ts.tokenStartOfNode(b),
       kind: "block",
@@ -5849,7 +5873,7 @@ export function lowerClassStaticRead(
     !(ts.isCallExpression(site.parent) && site.parent.expression === site)
   )
     lowerer.noLowering(`Date.${name} read through a class that extends Date`, site);
-  if (hasRuntimeStatics(info) && !found?.field)
+  if (hasRuntimeStatics(info) && !found?.field && !name.startsWith("#"))
     return {
       kind: "dynKeyGet",
       value: lowerer.coerceToExpected(classValueRef(lowerer, info, receiver), DYN),
@@ -6747,7 +6771,9 @@ function staticCallOn(
     if (date) return date;
   }
   if (
-    (hasRuntimeStatics(info) && !findStaticOn(lowerer, info, access.name.text)?.field) ||
+    (hasRuntimeStatics(info) &&
+      !access.name.text.startsWith("#") &&
+      !findStaticOn(lowerer, info, access.name.text)?.field) ||
     (info.callableBase &&
       !findStaticOn(lowerer, info, access.name.text) &&
       !findGenericStaticOn(lowerer, info, access.name.text))
@@ -7202,7 +7228,9 @@ export function lowerClassValueProperty(
   if (info?.def.runtime && member !== "name") return null;
   if (
     info &&
-    ((hasRuntimeStatics(info) && !findStaticOn(lowerer, info, member)?.field) ||
+    ((hasRuntimeStatics(info) &&
+      !member.startsWith("#") &&
+      !findStaticOn(lowerer, info, member)?.field) ||
       (info.callableBase && !findStaticOn(lowerer, info, member)))
   )
     return {
