@@ -1,6 +1,6 @@
 import { InternalCompilerError } from "../errors.js";
 import { keyedHelperName, type KeyedNameOwner } from "./lowering/stable-names.js";
-import type { HeldContents, JournalTable } from "./lowering/unit-journal.js";
+import { contentDigest, type HeldContents, type JournalTable } from "./lowering/unit-journal.js";
 import { mockCallRecordType, mockContextType } from "./mock-shapes.js";
 import * as ts from "./ts7/adapter.js";
 import { bodyReadsArguments } from "./arguments-usage.js";
@@ -718,9 +718,39 @@ export class UnionRegistry {
    * the key its arms give. A unit that adds a recursive union changes
    * journalSizes, so the unions past a unit's start are interned ones. */
   journalTable(): JournalTable {
+    // The position of each union by id, for the unions indexed so far.
+    let indexes = new Map<string, number>();
+    let indexed = 0;
+    const indexOf = (id: string): number | undefined => {
+      if (indexed > this.unions.length) {
+        indexes = new Map();
+        indexed = 0;
+      }
+      for (; indexed < this.unions.length; indexed++)
+        indexes.set(this.unions[indexed]!.id, indexed);
+      const index = indexes.get(id);
+      return index !== undefined && this.unions[index]?.id === id ? index : undefined;
+    };
     return {
       name: "unions",
       size: () => this.unions.length,
+      digest: (key, before) => {
+        if (!this.byId.has(key)) return null;
+        let index = indexOf(key);
+        if (index === undefined) {
+          // A list that was cut and grown again holds other unions at the
+          // positions indexed before.
+          indexes = new Map();
+          indexed = 0;
+          index = indexOf(key);
+        }
+        if (index === undefined || index >= before) return null;
+        return contentDigest(JSON.stringify(this.unions[index]!));
+      },
+      holds: (entry) => {
+        const def = JSON.parse(entry) as IrUnionDef;
+        return this.byKey.has(unionKey(def.arms, def.discriminant));
+      },
       entries: (from) => {
         const out: string[] = [];
         for (const def of this.unions.slice(from)) {
@@ -731,6 +761,12 @@ export class UnionRegistry {
         }
         return out;
       },
+      agrees: (entries) =>
+        entries.every((entry) => {
+          const def = JSON.parse(entry) as IrUnionDef;
+          const held = this.byKey.get(unionKey(def.arms, def.discriminant));
+          return held === undefined ? !this.byId.has(def.id) : held === def.id;
+        }),
       apply: (entries) => {
         for (const entry of entries) {
           const def = JSON.parse(entry) as IrUnionDef;

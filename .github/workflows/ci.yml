@@ -136,6 +136,8 @@ jobs:
         run: pnpm generate:ts7-ast --check
       - name: Verify the generated IR field readers
         run: pnpm generate:ir-fields --check
+      - name: Verify the generated IR codec
+        run: pnpm generate:ir-codec --check
 
   native_macos:
     needs: [validation_scope, lanes]
