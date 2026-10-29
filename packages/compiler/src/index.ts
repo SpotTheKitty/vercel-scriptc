@@ -112,7 +112,11 @@ import {
 } from "./backend/targets.js";
 import { windowsSubsystemLinkerArgs, type WindowsSubsystem } from "./backend/targets.js";
 import { createNativeLinkInfo } from "./backend/native-link-info.js";
-import { RuntimePackError } from "./backend/runtime-pack.js";
+import {
+  RuntimePackError,
+  loadRuntimePack,
+  type RuntimePackSelection,
+} from "./backend/runtime-pack.js";
 import { createNativeLinkPlan } from "./backend/link-plan.js";
 import {
   nativeProfileKey,
@@ -126,6 +130,7 @@ import {
 } from "./backend/native-profile.js";
 import {
   executableLinkerEnvironmentFingerprint,
+  installRuntimeDataFiles,
   linkNativeExecutable,
   platformLinkerSupportsPersistentCache,
   resolvePlatformLinker,
@@ -620,6 +625,55 @@ function executableNativeFeatures(
   };
 }
 
+/** Install the run-time data files of the selected runtime pack beside an
+ * executable this build linked while features.intl is true (ICU's
+ * icudt78l.dat). Every path that produces an Intl executable calls it: the
+ * pack link path installs them from its own selection (linker.ts), and the
+ * C-source path — sanitized builds, and links that do not start from a
+ * program object — compiles the runtime itself and would otherwise leave a
+ * binary whose Intl forms throw at run time for want of data. */
+async function installRuntimeDataBesideExecutable(
+  features: EarlyExecutableNativeFeatures,
+  outPath: string,
+): Promise<void> {
+  const pack = await intlRuntimePack(features);
+  if (pack !== null) await installRuntimeDataFiles(pack, outPath);
+}
+
+/** The host target's runtime pack selection for an Intl program, or null
+ * when the program does not use Intl or the build has no host target. */
+async function intlRuntimePack(
+  features: EarlyExecutableNativeFeatures,
+): Promise<RuntimePackSelection | null> {
+  if (features.intl !== true) return null;
+  const target = nativeCodegenTarget();
+  if (target === null) return null;
+  return loadRuntimePack({
+    target,
+    features,
+    optimization: features.optimization ?? "release",
+  });
+}
+
+/** The pack's ICU archive and the include root of the ICU headers it ships
+ * (`<root>/unicode/*.h`), both verified by loadRuntimePack, for the
+ * C-source path to link and compile scr_intl.c against. Null when the pack
+ * lists no headers: that path then builds ICU from its fetched release. */
+function runtimePackIcuInputs(
+  pack: RuntimePackSelection | null,
+): { archive: string; include: string } | null {
+  if (pack === null) return null;
+  const header = pack.selectedHeaderArtifacts[0];
+  const index = pack.selectedArchiveArtifacts.findIndex(
+    (artifact) => "id" in artifact && artifact.id === "icu",
+  );
+  if (header === undefined || index < 0) return null;
+  return {
+    archive: pack.archives[index]!,
+    include: join(pack.root, dirname(dirname(header.path))),
+  };
+}
+
 async function compileExecutableNative(
   features: EarlyExecutableNativeFeatures,
   llvmPath: string,
@@ -682,6 +736,8 @@ async function compileExecutableNative(
     throw new InternalCompilerError("program objects must link against a precompiled runtime pack");
   if (staticLink)
     throw new InternalCompilerError("--static executables link against a precompiled runtime pack");
+  const intlPack = await intlRuntimePack(features);
+  const icuPack = runtimePackIcuInputs(intlPack);
   await compileExternalC({
     ...(llvmVisiblePath === undefined || llvmVisiblePath === llvmPath
       ? { cPath: llvmPath }
@@ -715,6 +771,8 @@ async function compileExecutableNative(
     ...(features.primitiveWrapper ? { primitiveWrapper: true } : {}),
     zlib: features.zlib,
     ...(features.brotli ? { brotli: true } : {}),
+    ...(features.intl ? { intl: true } : {}),
+    ...(icuPack === null ? {} : { icuPack }),
     assert: features.assert,
     inspect: features.inspect,
     dynInvoke: features.dynInvoke,
@@ -780,6 +838,7 @@ async function compileExecutableNative(
           frameworks: ffi.frameworks,
         }),
   });
+  if (intlPack !== null) await installRuntimeDataFiles(intlPack, outPath);
 }
 
 interface NativeProgramObject {
@@ -1954,6 +2013,10 @@ async function compileTracked(
     // index so the next identical CLI invocation can avoid this module graph.
     await publishEarlyExecutableRoute(cacheRoot, executableCacheOptions).catch(() => undefined);
     if (earlyHit.executableRestored) {
+      // The executable came back from the cache without a link, so the data
+      // files its Intl program loads at RUN time (ICU's icudt78l.dat) are not
+      // beside it yet; a cache hit that links gets them from the linker.
+      await installRuntimeDataBesideExecutable(earlyHit.native, opts.outPath);
       await pruneBuildCache(cacheRoot);
       timing("complete");
       return {

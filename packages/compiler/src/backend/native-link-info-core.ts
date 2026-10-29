@@ -155,6 +155,10 @@ export interface NativeLinkFeatures {
   x509: boolean;
   /** perf_hooks event-loop metrics: scr_perf_loop.c. */
   perfLoop: boolean;
+  /** Intl over ICU (scr_intl.c plus the ICU archive and its data
+   * file): the `icu.*` libCalls of the first slice. Absent (false) for
+   * programs without them, so their link features stay unchanged. */
+  intl?: boolean;
   tlsCa: boolean;
   /** crypto.subtle importKey/sign/verify/digest and CryptoKey values:
    * scr_webcrypto.c. */

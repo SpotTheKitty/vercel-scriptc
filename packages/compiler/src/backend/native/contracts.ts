@@ -83,6 +83,17 @@ export interface CcOptions {
   /** The program uses node:zlib's Brotli forms (with zlib): compiles
    * scr_brotli.c and links the vendored brotli archive. */
   brotli?: boolean;
+  /** The program uses an Intl form that only ICU can answer (the `icu.*`
+   * libCalls: default-locale number/date formats, word segmentation):
+   * compiles scr_intl.c and links the ICU archive, and the
+   * executable gets icudt78l.dat next to it. Every engine-free form keeps
+   * linking none of it. */
+  intl?: boolean;
+  /** With `intl`: the installed runtime pack's ICU archive and the include
+   * root of the ICU headers it ships. The C-source path then links that
+   * archive and compiles scr_intl.c against those headers, instead of
+   * building ICU from its fetched release with Zig's C++ driver. */
+  icuPack?: { archive: string; include: string };
   /** The program uses node:assert (index.ts detects assert.* libCalls on
    * the IR): compiles scr_assert.c — the zlib gating precedent, so
    * assert-free binaries keep their exact size class. scr_regex.c calls

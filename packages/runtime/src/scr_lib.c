@@ -626,9 +626,11 @@ ScrArr *scr_process_argv(void) {
     int argc = scr_lib_arg_count();
     scr_argv_arr = scr_arr_new(SCR_ELEM_STR, (size_t)argc + 1);
     scr_arr_push_ref(scr_argv_arr, scr_str_new("scriptc", 7));
+    /* Node decodes each argument as UTF-8, replacing malformed bytes with
+     * U+FFFD. */
     for (int i = 0; i < argc; i++) {
       const char *a = scr_lib_arg(i);
-      scr_arr_push_ref(scr_argv_arr, scr_str_new(a, strlen(a)));
+      scr_arr_push_ref(scr_argv_arr, scr_str_from_utf8_lossy((const uint8_t *)a, strlen(a)));
     }
   }
   return scr_arr_retain(scr_argv_arr);
@@ -2854,7 +2856,7 @@ void scr_process_set_title(const ScrStr *title) {
 ScrStr *scr_process_argv0(void) {
   if (scr_lib_arg_count() < 1) return scr_str_new("", 0);
   const char *a = scr_lib_arg(0);
-  return scr_str_new(a, strlen(a));
+  return scr_str_from_utf8_lossy((const uint8_t *)a, strlen(a));
 }
 
 static SCR_TL ScrDyn *scr_release_object;
@@ -6615,30 +6617,39 @@ struct ScrScandir {
 
 #ifndef _WIN32
 /* libuv's uv_fs_scandir sorts entries with strcmp on POSIX hosts, so
- * readdir, readdirSync and fs/promises readdir list names in byte order. */
+ * readdir, readdirSync and fs/promises readdir list names in byte order.
+ * The sort runs on the raw entry bytes before decoding: a name that is not
+ * valid UTF-8 decodes to U+FFFD text that no longer orders like its bytes,
+ * and two malformed names can decode to the same text, so decoding first
+ * would list them in an order Node never produces. */
 typedef struct {
-  ScrStr *name;
+  char *raw;
   unsigned char kind;
 } ScrScandirEntry;
 
 static int scr_fs_scandir_cmp(const void *a, const void *b) {
-  const ScrStr *x = ((const ScrScandirEntry *)a)->name, *y = ((const ScrScandirEntry *)b)->name;
-  size_t n = x->len < y->len ? x->len : y->len;
-  int c = memcmp(x->data, y->data, n);
-  return c ? c : (x->len > y->len) - (x->len < y->len);
+  return strcmp(((const ScrScandirEntry *)a)->raw, ((const ScrScandirEntry *)b)->raw);
 }
 
-static void scr_fs_scandir_sort(ScrScandir *s) {
-  if (s->len < 2) return;
-  ScrScandirEntry *rows = malloc(s->len * sizeof *rows);
-  if (!rows) scr_trap("scriptc: out of memory\n");
-  for (size_t i = 0; i < s->len; i++) rows[i] = (ScrScandirEntry){s->names[i], s->kinds[i]};
-  qsort(rows, s->len, sizeof *rows, scr_fs_scandir_cmp);
-  for (size_t i = 0; i < s->len; i++) {
-    s->names[i] = rows[i].name;
+/* Sorts the collected rows by their raw bytes, then decodes each name into a
+ * fresh ScrScandir and frees the rows. */
+static ScrScandir *scr_fs_scandir_from_rows(ScrScandirEntry *rows, size_t len) {
+  ScrScandir *s = malloc(sizeof *s);
+  if (!s) scr_trap("scriptc: out of memory\n");
+  s->len = len;
+  s->cap = len;
+  s->names = len ? malloc(len * sizeof *s->names) : NULL;
+  s->kinds = len ? malloc(len) : NULL;
+  if (len && (!s->names || !s->kinds)) scr_trap("scriptc: out of memory\n");
+  qsort(rows, len, sizeof *rows, scr_fs_scandir_cmp);
+  for (size_t i = 0; i < len; i++) {
+    /* Decoded as UTF-8 with U+FFFD for malformed bytes, as Node does. */
+    s->names[i] = scr_str_from_utf8_lossy((const uint8_t *)rows[i].raw, strlen(rows[i].raw));
     s->kinds[i] = rows[i].kind;
+    free(rows[i].raw);
   }
   free(rows);
+  return s;
 }
 
 static unsigned char scr_dirent_kind_of_mode(mode_t m) {
@@ -6727,15 +6738,9 @@ ScrScandir *scr_fs_scandir(ScrStr *path) {
     scr_fs_throw(errno, "scandir", path); /* Node reports scandir */
     return NULL;
   }
-  ScrScandir *s = malloc(sizeof *s);
-  if (!s) {
-    scr_trap("scriptc: out of memory\n");
-  }
-  s->len = 0;
-  s->cap = 8;
-  s->names = malloc(s->cap * sizeof *s->names);
-  s->kinds = malloc(s->cap);
-  if (!s->names || !s->kinds) {
+  size_t len = 0, cap = 8;
+  ScrScandirEntry *rows = malloc(cap * sizeof *rows);
+  if (!rows) {
     scr_trap("scriptc: out of memory\n");
   }
   const struct dirent *ent;
@@ -6772,21 +6777,24 @@ ScrScandir *scr_fs_scandir(ScrStr *path) {
                  : 0;
     }
 #endif
-    if (s->len == s->cap) {
-      s->cap *= 2;
-      s->names = realloc(s->names, s->cap * sizeof *s->names);
-      s->kinds = realloc(s->kinds, s->cap);
-      if (!s->names || !s->kinds) {
+    if (len == cap) {
+      cap *= 2;
+      rows = realloc(rows, cap * sizeof *rows);
+      if (!rows) {
         scr_trap("scriptc: out of memory\n");
       }
     }
-    s->names[s->len] = scr_str_new(ent->d_name, strlen(ent->d_name));
-    s->kinds[s->len] = kind;
-    s->len++;
+    size_t raw_len = strlen(ent->d_name);
+    rows[len].raw = malloc(raw_len + 1);
+    if (!rows[len].raw) {
+      scr_trap("scriptc: out of memory\n");
+    }
+    memcpy(rows[len].raw, ent->d_name, raw_len + 1);
+    rows[len].kind = kind;
+    len++;
   }
   closedir(d);
-  scr_fs_scandir_sort(s);
-  return s;
+  return scr_fs_scandir_from_rows(rows, len);
 #endif
 }
 
@@ -7026,7 +7034,9 @@ bool scr_dir_read(ScrDir *d, ScrStr **name, double *kind) {
       return false;
     }
     if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-    *name = scr_str_new(ent->d_name, strlen(ent->d_name));
+    /* Node decodes an entry name as UTF-8, replacing malformed bytes with
+     * U+FFFD. */
+    *name = scr_str_from_utf8_lossy((const uint8_t *)ent->d_name, strlen(ent->d_name));
     *kind = scr_dir_entry_kind(d, ent);
     return true;
   }

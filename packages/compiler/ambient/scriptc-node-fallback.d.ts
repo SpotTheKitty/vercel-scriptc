@@ -246,12 +246,13 @@ declare var process: {
   /* "v" plus versions.node: the compatibility target's release. */
   readonly version: string;
   /* The build-configuration snapshot Node exposes from its gyp config.
-   * A scriptc binary has no V8 and no gyp, so `variables` answers the
-   * honest capability record (v8_enable_i18n_support: 0 — no ICU; asan
-   * mirrors the sanitizer build flag) and `target_defaults` is absent —
-   * probe code takes its documented fallbacks. Reads of undeclared
-   * variables go through the index signature (string | number | boolean
-   * | undefined) and answer undefined. */
+   * A scriptc binary has no V8 and no gyp, so `variables` answers what is
+   * true of a compiled binary: v8_enable_i18n_support is 1 like Node's
+   * (the read links ICU, which the binary then carries), while the gyp
+   * variables it cannot answer (icu_path, asan, …) read undefined through
+   * the index signature (string | number | boolean | undefined), and
+   * `target_defaults` is absent — probe code takes its documented
+   * fallbacks. */
   readonly config: {
     readonly variables: { readonly [name: string]: string | number | boolean | undefined };
     readonly target_defaults?: { readonly default_configuration: string };

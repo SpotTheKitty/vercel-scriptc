@@ -211,6 +211,11 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "num.toPrecision",
   "num.toExponentialDigits",
   "str.localeCase",
+  // The default-locale ICU formatters throw an Error when the ICU data file
+  // is missing (scr_intl.c).
+  "icu.numFormatDefault",
+  "icu.dateLocaleString",
+  "icu.dateLocaleTimeString",
   "num.toStringRadix",
   "num.toStringRadixF64",
   "insp.jsonDyn",

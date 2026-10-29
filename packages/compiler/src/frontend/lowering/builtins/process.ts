@@ -678,9 +678,10 @@ export function lowerProcessProperty(
   // The capability-probe members that honestly DON'T EXIST in a
   // compiled binary — each reads undefined (their declared types carry
   // the undefined arm), so feature probes take their documented
-  // fallbacks: no gyp build config (process.config.variables.* — no ICU,
-  // no QUIC — and process.config.target_defaults), no feature flags
-  // (process.features.* — no inspector, not a debug build).
+  // fallbacks: no gyp build config (process.config.variables.* — no QUIC
+  // — and process.config.target_defaults; v8_enable_i18n_support is the
+  // exception below, answered from the binary's linked ICU), no feature
+  // flags (process.features.* — no inspector, not a debug build).
   if (!expr.questionDotToken && ts.isPropertyAccessExpression(expr.expression)) {
     const container = lowerer.stdlibGlobalMember(expr.expression, "process");
     if (container === "features") {
@@ -703,6 +704,13 @@ export function lowerProcessProperty(
       expr.expression.name.text === "variables" &&
       lowerer.stdlibGlobalMember(expr.expression.expression, "process") === "config"
     ) {
+      // The one variable a compiled binary can answer truthfully:
+      // v8_enable_i18n_support. Node bundles ICU and answers the number 1;
+      // this read selects the `icu` runtime feature (scr_intl.c), so a
+      // binary that reports ICU is a binary that carries it.
+      if (expr.name.text === "v8_enable_i18n_support") {
+        return { kind: "libCall", fn: "icu.i18nSupport", args: [], type: F64, loc: locOf(expr) };
+      }
       return { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc: locOf(expr) };
     }
   }
