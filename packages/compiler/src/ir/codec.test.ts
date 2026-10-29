@@ -17,7 +17,7 @@ import { F64, STRING, VOID, type IrFunction, type IrModule } from "./ir.js";
 import { deserializeModuleBytes } from "./serialize.js";
 
 // Programs with many node kinds: classes, closures, async, generators,
-// dynamic values, streams, records, regexes and lone surrogates.
+// dynamic values, streams, records, regexes, lone surrogates and BigIntStats.
 const PROGRAMS = [
   "1003-json-parse-unions.ts",
   "114-live-record-delete.ts",
@@ -26,6 +26,7 @@ const PROGRAMS = [
   "4900-console-instances.ts",
   "4991-lone-surrogate-halves.ts",
   "5612-readable-from-iterables.cjs",
+  "7018-bigint-stats.ts",
   "7110-als-completion-callbacks.ts",
   "7321-speculative-loop-bail-sites.ts",
 ];

@@ -31,7 +31,10 @@
  *   itself, since analyses read a binding's or property's writes anywhere;
  * - the names that refer to a module's namespace object, by a namespace
  *   import or an `import()` or `require()` call, when the module's exports
- *   changed.
+ *   changed;
+ * - the names that hold one of these under another name (Alias): a renamed
+ *   or default import, a renamed or default export, a renamed `require()`
+ *   destructuring, and the aliases of those.
  *
  * TypeScript resolves every dependency of a type through a name some text
  * spells, so a unit whose text spells none of these sees the same types,
@@ -537,6 +540,71 @@ function namespaceSites(
   });
 }
 
+/** A name a binding of a module's text holds under another name: `from`
+ * is the imported or exported name, `to` the local or exported one
+ * (`import { from as to }`, `import to from`, whose `from` is `default`,
+ * `export { from as to }`, `export default from`). Text that spells `to`
+ * reaches the declaration of `from`. */
+type Alias = readonly [from: string, to: string];
+
+/** The aliases `statement` makes (Alias). `names` are the names it
+ * declares. */
+function aliasesOf(statement: ts.Statement, names: readonly string[], out: Alias[]): void {
+  const add = (from: string, to: string): void => {
+    if (from !== to) out.push([from, to]);
+  };
+  const specifiers = (elements: readonly (ts.ImportSpecifier | ts.ExportSpecifier)[]): void => {
+    for (const element of elements)
+      add((element.propertyName ?? element.name).text, element.name.text);
+  };
+  if (ts.isImportDeclaration(statement)) {
+    const clause = statement.importClause;
+    if (clause?.name !== undefined) add("default", clause.name.text);
+    const bindings = clause?.namedBindings;
+    if (bindings !== undefined && ts.isNamedImports(bindings)) specifiers(bindings.elements.nodes);
+    return;
+  }
+  if (ts.isImportEqualsDeclaration(statement)) {
+    const reference = statement.moduleReference;
+    if (ts.isIdentifier(reference)) add(reference.text, statement.name.text);
+    else if (ts.isQualifiedName(reference)) add(reference.right.text, statement.name.text);
+    return;
+  }
+  if (ts.isExportDeclaration(statement)) {
+    const clause = statement.exportClause;
+    if (clause !== undefined && ts.isNamedExports(clause)) specifiers(clause.elements.nodes);
+    return;
+  }
+  const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
+  if (
+    ts.isExportAssignment(statement) ||
+    modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) === true
+  ) {
+    for (const name of names) add(name, "default");
+    return;
+  }
+  // `const { from: to } = require("...")`.
+  if (ts.isVariableStatement(statement))
+    for (const declaration of statement.declarationList.declarations.nodes) {
+      const initializer = declaration.initializer;
+      if (
+        !ts.isObjectBindingPattern(declaration.name) ||
+        initializer === undefined ||
+        !ts.isCallExpression(initializer) ||
+        !ts.isIdentifier(initializer.expression) ||
+        initializer.expression.text !== "require"
+      )
+        continue;
+      for (const element of declaration.name.elements.nodes)
+        if (
+          element.propertyName !== undefined &&
+          ts.isIdentifier(element.propertyName) &&
+          ts.isIdentifier(element.name)
+        )
+          add(element.propertyName.text, element.name.text);
+    }
+}
+
 /** A module's declaration table, its declarations' nodes, and the text of
  * its statements with global effect. A file that is not a module has global
  * effect as a whole. */
@@ -544,7 +612,7 @@ function fileTable(
   sf: ts.SourceFile,
   hooks: UnitReuseHooks,
   previous: FileTable | undefined,
-): { table: FileTable; nodes: DeclarationNode[]; global: string } {
+): { table: FileTable; nodes: DeclarationNode[]; aliases: Alias[]; global: string } {
   // A declaration with the text it had in the previous build writes what it
   // wrote then.
   const before = new Map((previous?.declarations ?? []).map((d) => [d.key, d]));
@@ -556,6 +624,7 @@ function fileTable(
   const declarations: Declaration[] = [];
   const namespaces: NamespaceSite[] = [];
   const nodes: DeclarationNode[] = [];
+  const aliases: Alias[] = [];
   const keys = new Set<string>();
   let global = "";
   const unique = (key: string): string => {
@@ -568,6 +637,7 @@ function fileTable(
   for (const statement of sf.statements.nodes) {
     if (ts.isImportDeclaration(statement) || ts.isImportEqualsDeclaration(statement)) {
       namespaceSites(sf, statement, [], hooks, namespaces);
+      aliasesOf(statement, [], aliases);
       continue;
     }
     if (!module || hasGlobalEffect(statement)) {
@@ -576,6 +646,7 @@ function fileTable(
     }
     const names = statementNames(statement, js, hooks);
     namespaceSites(sf, statement, names, hooks, namespaces);
+    aliasesOf(statement, names, aliases);
     const kind = String(statement.kind);
     if (ts.isClassDeclaration(statement) || ts.isInterfaceDeclaration(statement)) {
       // Each member is a declaration of its own; the rest of the class or
@@ -647,6 +718,7 @@ function fileTable(
       namespaces,
     },
     nodes,
+    aliases,
     global,
   };
 }
@@ -710,10 +782,12 @@ export class UnitReuse {
     private readonly tables: Map<string, FileTable>,
     previous: { program: string; tables: Map<string, FileTable> } | null,
     nodes: readonly DeclarationNode[],
+    aliases: readonly Alias[],
   ) {
     this.previous = previous !== null && previous.program === program ? previous.tables : null;
     this.records = previous !== null;
-    this.changed = this.previous === null ? new Set() : changedNames(this.previous, tables, nodes);
+    this.changed =
+      this.previous === null ? new Set() : changedNames(this.previous, tables, nodes, aliases);
     this.stats.changedNames = this.changed.size;
   }
 
@@ -729,6 +803,7 @@ export class UnitReuse {
     const own = new Set(files);
     const tables = new Map<string, FileTable>();
     const nodes: DeclarationNode[] = [];
+    const aliases: Alias[] = [];
     const previous = readProgram(store);
     const digest = createHash("sha256").update(
       `${PROGRAM_MAGIC}\n${IR_VERSION}\n${IR_CODEC_LAYOUT}\n`,
@@ -737,6 +812,7 @@ export class UnitReuse {
       const file = fileTable(sf, hooks, previous?.tables.get(sf.fileName));
       tables.set(sf.fileName, file.table);
       for (const node of file.nodes) nodes.push(node);
+      for (const alias of file.aliases) aliases.push(alias);
       digest.update(`${sf.fileName}\n${digestOf(file.global)}\n`);
     }
     const others = program
@@ -745,7 +821,7 @@ export class UnitReuse {
       .map((sf) => `${sf.fileName}\n${digestOf(sf.text)}\n`)
       .sort();
     for (const other of others) digest.update(other);
-    const reuse = new UnitReuse(store, digest.digest("hex"), tables, previous, nodes);
+    const reuse = new UnitReuse(store, digest.digest("hex"), tables, previous, nodes, aliases);
     reuse.stats.openMs = performance.now() - started;
     return reuse;
   }
@@ -863,6 +939,7 @@ function changedNames(
   before: Map<string, FileTable>,
   now: Map<string, FileTable>,
   nodes: readonly DeclarationNode[],
+  aliases: readonly Alias[],
 ): Set<string> {
   const surfaces = new Set<string>();
   const direct = new Set<string>();
@@ -907,31 +984,47 @@ function changedNames(
   };
   for (const [path, table] of now) compare(before.get(path), table);
   for (const [path, table] of before) if (!now.has(path)) compare(table, undefined);
-  if (surfaces.size > 0) {
+  // A name that holds a changed name under another name changes the same
+  // way (Alias).
+  const follow = (): boolean => {
+    let grew = false;
+    for (const [from, to] of aliases) {
+      if (surfaces.has(from) && !surfaces.has(to)) {
+        surfaces.add(to);
+        grew = true;
+      }
+      if (direct.has(from) && !direct.has(to)) {
+        direct.add(to);
+        grew = true;
+      }
+    }
+    return grew;
+  };
+  let pending: { declaration: DeclarationNode; spells: Set<string> }[] | null = null;
+  for (let grew = true; grew;) {
+    grew = follow();
+    if (surfaces.size === 0) continue;
     // A declaration whose surface spells a changed name can have another
-    // type now (typeChanged); repeat until no surface adds a name.
-    const pending = nodes.map((declaration) => ({
+    // type now (typeChanged); repeat until no surface or alias adds a name.
+    pending ??= nodes.map((declaration) => ({
       declaration,
       spells: surfaceNames(declaration),
     }));
-    for (let grew = true; grew;) {
-      grew = false;
-      for (let index = 0; index < pending.length; index++) {
-        const entry = pending[index]!;
-        let hit = false;
-        for (const name of entry.spells)
-          if (surfaces.has(name)) {
-            hit = true;
-            break;
-          }
-        if (!hit) continue;
-        typeChanged(entry.declaration);
-        // Each declaration joins once.
-        pending[index] = pending[pending.length - 1]!;
-        pending.pop();
-        index--;
-        grew = true;
-      }
+    for (let index = 0; index < pending.length; index++) {
+      const entry = pending[index]!;
+      let hit = false;
+      for (const name of entry.spells)
+        if (surfaces.has(name)) {
+          hit = true;
+          break;
+        }
+      if (!hit) continue;
+      typeChanged(entry.declaration);
+      // Each declaration joins once.
+      pending[index] = pending[pending.length - 1]!;
+      pending.pop();
+      index--;
+      grew = true;
     }
   }
   for (const name of direct) surfaces.add(name);

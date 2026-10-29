@@ -313,3 +313,68 @@ test("the first build into a cache writes the declaration tables and no unit rec
     await workspace.dispose();
   }
 }, 300_000);
+
+const ALIASES = {
+  "values.ts": [
+    "export const limit: number = 3;",
+    "export const unit = 2;",
+    "export default function scale(value: number): number {",
+    "  return value * unit;",
+    "}",
+    "export { unit as step };",
+    "",
+  ].join("\n"),
+  "main.ts": [
+    'import { limit as max, step } from "./values.js";',
+    'import grow from "./values.js";',
+    "function cap(value: number): string {",
+    "  return `${value} of ${max}`;",
+    "}",
+    "function stepped(value: number): number {",
+    "  return value + step;",
+    "}",
+    "function grown(value: number): number {",
+    "  return grow(value);",
+    "}",
+    "console.log(cap(5), stepped(1), grown(4));",
+    "",
+  ].join("\n"),
+};
+
+test("a renamed import lowers again when its declaration's surface changes", async () => {
+  const workspace = await Workspace.create(ALIASES);
+  try {
+    await workspace.build();
+    await workspace.edit(
+      "values.ts",
+      "export const limit: number = 3;",
+      'export const limit = "3";',
+    );
+    const applied = await workspace.build();
+    expect(has(applied, "cap")).toBe(false);
+    expect(has(applied, "grown")).toBe(true);
+  } finally {
+    await workspace.dispose();
+  }
+}, 300_000);
+
+test("an import of a renamed export or of a default export lowers again when its declaration changes", async () => {
+  const workspace = await Workspace.create(ALIASES);
+  try {
+    await workspace.build();
+    await workspace.edit("values.ts", "export const unit = 2;", "export const unit = 5;");
+    let applied = await workspace.build();
+    expect(has(applied, "stepped")).toBe(false);
+    expect(has(applied, "cap")).toBe(true);
+    await workspace.edit(
+      "values.ts",
+      "export default function scale(value: number): number {",
+      "export default function scale(value: number, by = 1): number {",
+    );
+    applied = await workspace.build();
+    expect(has(applied, "grown")).toBe(false);
+    expect(has(applied, "cap")).toBe(true);
+  } finally {
+    await workspace.dispose();
+  }
+}, 300_000);
