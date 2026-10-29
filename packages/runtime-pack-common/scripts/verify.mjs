@@ -23,6 +23,7 @@ const artifacts = [
     ),
   ),
   ...manifest.archives,
+  ...(manifest.data ?? []),
 ];
 for (const artifact of artifacts) {
   const bytes = await readFile(join(root, artifact.path));

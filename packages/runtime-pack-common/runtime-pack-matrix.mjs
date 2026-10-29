@@ -99,6 +99,11 @@ export const OPTIONAL_RUNTIME_SOURCES = [
   ["scr_blob.c", "dynAsync"],
   ["scr_zlib.c", "zlib"],
   ["scr_brotli.c", all("zlib", "brotli")],
+  // Intl over ICU (scr_intl.c): the default-locale number/date formats and
+  // word segmentation, over the packed ICU archive and its data file.
+  // Every engine-free Intl form (the en-US fast paths, default grapheme
+  // clusters) keeps its own unit and links none of this.
+  ["scr_intl.c", "intl"],
   ["scr_events.c", "events"],
   ["scr_readline.c", "events"],
   ["scr_readline_tty.c", all("events", "regex")],
@@ -361,6 +366,7 @@ export function createRuntimePackMatrix({
     { id: "libregexp", predicate: "regex" },
     { id: "zlib", predicate: "zlibEffective" },
     { id: "brotli", predicate: all("zlib", "brotli") },
+    { id: "icu", predicate: "intl" },
     { id: "mbedtls", predicate: any("tlsEffective", "cipher", "ecdh", "dh", "pki") },
   ];
   const matrix = withLibraryRuntimeFlavors(

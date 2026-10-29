@@ -121,6 +121,8 @@ export interface EarlyExecutableNativeFeatures {
   perfLoop: boolean;
   tlsCa: boolean;
   webcrypto: boolean;
+  /** Intl over ICU (scr_intl.c, the ICU archive and its data file). */
+  intl?: boolean;
 }
 
 interface EarlyExecutableCacheStamp {

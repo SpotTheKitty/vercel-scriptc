@@ -4,20 +4,23 @@
  * artifacts it verified are kept between builds: an artifact whose file
  * identity is unchanged since it was hashed is not hashed again. */
 import type { NativeOptimization } from "./optimization.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
+  copyFileSync,
   existsSync,
   fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
+  rmSync,
   statSync,
   writeSync,
   type Stats,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { NativeLinkFeatures } from "./native-link-info.js";
 import type { NativeTargetSpec } from "./targets.js";
 import {
@@ -94,7 +97,9 @@ function storeKey(text: string): string {
 /** A stored selection: what selecting from the pack's files, with these
  * identities, returned. */
 interface StoredSelection {
-  schema: 1;
+  /** 2 adds the selection's data artifacts: a stored selection from before
+   * them would make an Intl build stage none of them, so it is discarded. */
+  schema: 2;
   licenses: RuntimePackManifest["licenses"];
   selected: RuntimePackArtifacts;
 }
@@ -172,7 +177,7 @@ export function selectNativeRuntimePack(
         sameIdentity(fileIdentity(packagePath), identities[0]!) &&
         sameIdentity(fileIdentity(manifestPath), identities[1]!)
       ) {
-        const entry: StoredSelection = { schema: 1, licenses: manifest.licenses, selected };
+        const entry: StoredSelection = { schema: 2, licenses: manifest.licenses, selected };
         store.write(key, JSON.stringify(entry));
       }
     } catch {
@@ -201,13 +206,14 @@ function readStoredSelection(text: string | null): StoredSelection | null {
   if (value === null || typeof value !== "object") return null;
   const entry = value as Partial<StoredSelection>;
   if (
-    entry.schema !== 1 ||
+    entry.schema !== 2 ||
     !Array.isArray(entry.licenses) ||
     entry.selected === undefined ||
     entry.selected === null ||
     typeof entry.selected !== "object" ||
     !Array.isArray(entry.selected.runtime) ||
     !Array.isArray(entry.selected.archives) ||
+    !Array.isArray(entry.selected.data) ||
     !Array.isArray(entry.selected.systemLibraries)
   )
     return null;
@@ -382,4 +388,38 @@ export function stageNativeRuntimeSelection(
     }
   }
   return { runtimeObjects, archives, systemLibraries: selected.systemLibraries };
+}
+
+/** Install the selected RUN-time data artifacts (ICU's icudt78l.dat) beside an
+ * executable this host linked. The in-process linker does the same from its
+ * own selection (backend/linker.ts); this host writes executables
+ * synchronously and has no link plan, so it installs them here.
+ *
+ * A file already present at the pinned size is left alone (31.6 MiB of pure
+ * cost otherwise), and the copy is atomic — a private temporary, then a
+ * rename — so two concurrent builds of one program never read a partial
+ * file. */
+export function installNativeRuntimeData(
+  selection: NativeRuntimeSelection,
+  outputPath: string,
+): void {
+  const data = selection.selected.data ?? [];
+  if (data.length === 0) return;
+  const outputDir = dirname(resolve(outputPath));
+  for (const artifact of data) {
+    const destination = join(outputDir, basename(artifact.path));
+    const existing = statSync(destination, { throwIfNoEntry: false });
+    if (existing?.isFile() === true && existing.size === artifact.size) continue;
+    const temporary = join(
+      outputDir,
+      `.${basename(destination)}.scriptc-${process.pid}-${randomUUID()}`,
+    );
+    copyFileSync(join(selection.root, artifact.path), temporary);
+    try {
+      renameSync(temporary, destination);
+    } catch {
+      rmSync(destination, { force: true });
+      renameSync(temporary, destination);
+    }
+  }
 }

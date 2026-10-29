@@ -78,5 +78,6 @@ export function executableLinkFeatures(mod: IrModule, largePages = false): Nativ
     x509: features.x509,
     webcrypto: features.webcrypto,
     perfLoop: features.perfLoop,
+    ...(features.icu ? { intl: true } : {}),
   };
 }

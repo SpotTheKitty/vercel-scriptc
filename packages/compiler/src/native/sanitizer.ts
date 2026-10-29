@@ -163,6 +163,21 @@ export function buildSanitizedRuntime(
     const name = basename(archive.path)
       .replace(/^libscriptc-/, "")
       .replace(/\.a$/, "");
+    // ICU is the one vendored prerequisite this loop cannot rebuild: it is
+    // C++, and its archive compiles with Zig's C++ driver (ensureIcuArchive
+    // in backend/vendor-archives.ts) so it binds the packs' glibc floor —
+    // not the sanitizer lane's C driver. It is also by far the largest
+    // (~600 TUs), so instrumenting it would add a multi-minute C++ build to
+    // the first Intl program in every sanitized lane. The pack's archive is
+    // linked as shipped instead: this repository's ICU code (scr_intl.c)
+    // still compiles instrumented with every other runtime unit, and
+    // AddressSanitizer's interceptors cover ICU's allocations. The pack is
+    // installed beside the sources, not an evictable cache, so the path can
+    // be linked directly.
+    if (name === "icu") {
+      archives.push(join(selection.root, archive.path));
+      continue;
+    }
     let sources: readonly string[];
     let directory: string;
     let args: string[];

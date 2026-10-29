@@ -150,6 +150,7 @@ test.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
           selected: {
             runtime: [],
             archives: [artifact],
+            data: [],
             systemLibraries: [],
             features,
           },
@@ -243,7 +244,13 @@ test.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
           packageText: "",
           manifestText: "",
           flavor: "dev",
-          selected: { runtime: [variants[0]!], archives: [], systemLibraries: [], features },
+          selected: {
+            runtime: [variants[0]!],
+            archives: [],
+            data: [],
+            systemLibraries: [],
+            features,
+          },
         },
         directory,
         "executable",
