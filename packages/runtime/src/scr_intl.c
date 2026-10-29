@@ -55,6 +55,10 @@
 
 static int scr_intl_data_state; /* 0 = not tried, 1 = ready, 2 = failed */
 
+/* The default locale every formatter and the default word segmenter use,
+ * resolved with the data (scr_intl_default_locale). */
+static char scr_intl_locale[ULOC_FULLNAME_CAPACITY];
+
 /** The running executable's directory, without a trailing separator. */
 static bool scr_intl_exe_dir(char *out, size_t size) {
 #if defined(__linux__)
@@ -91,6 +95,28 @@ static bool scr_intl_file_exists(const char *path) {
   return true;
 }
 
+/** V8's default locale (Intl::DefaultLocale): ICU's default, which ICU
+ * derives from the host environment, as a BCP 47 tag. ICU answers
+ * "en_US_POSIX" for LC_ALL=C, C.UTF-8 and POSIX, and V8 replaces that
+ * locale (and "c") with "en-US", so the POSIX tailoring's ungrouped
+ * numbers never reach a formatter. Every other default round-trips through
+ * its language tag, as V8's formatters receive it. */
+static void scr_intl_default_locale(void) {
+  const char *name = uloc_getDefault();
+  if (strcmp(name, "en_US_POSIX") == 0 || strcmp(name, "c") == 0) {
+    strcpy(scr_intl_locale, "en_US");
+    return;
+  }
+  char tag[ULOC_FULLNAME_CAPACITY];
+  UErrorCode status = U_ZERO_ERROR;
+  int32_t tagLen = uloc_toLanguageTag(name, tag, (int32_t)sizeof tag, false, &status);
+  if (U_SUCCESS(status) && tagLen > 0 && tagLen < (int32_t)sizeof tag) {
+    uloc_forLanguageTag(tag, scr_intl_locale, (int32_t)sizeof scr_intl_locale, NULL, &status);
+    if (U_SUCCESS(status) && status != U_STRING_NOT_TERMINATED_WARNING) return;
+  }
+  snprintf(scr_intl_locale, sizeof scr_intl_locale, "%s", name);
+}
+
 /** True once ICU can resolve data: the file beside the executable, else
  * whatever ICU's own search finds (ICU_DATA). Never throws; the callers
  * do, with the same message. */
@@ -112,6 +138,7 @@ static bool scr_intl_data(void) {
   UNumberFormat *probe = unum_open(UNUM_DECIMAL, NULL, 0, NULL, NULL, &status);
   if (U_FAILURE(status) || probe == NULL) return false;
   unum_close(probe);
+  scr_intl_default_locale();
   scr_intl_data_state = 1;
   return true;
 }
@@ -235,10 +262,8 @@ ScrStr *scr_intl_num_format_default(double x) {
     scr_intl_no_data();
     return NULL;
   }
-  /* locale NULL: the default locale, which ICU resolves from the host
-   * environment exactly as V8's own ICU does. */
   UNumberFormatter *formatter =
-    unumf_openForSkeletonAndLocale(skeleton, skeletonLen, NULL, &status);
+    unumf_openForSkeletonAndLocale(skeleton, skeletonLen, scr_intl_locale, &status);
   if (U_FAILURE(status) || formatter == NULL) {
     scr_intl_no_data();
     return NULL;
@@ -302,7 +327,7 @@ static ScrStr *scr_intl_format_date(double ms, const char *skeletonText) {
     scr_intl_no_data();
     return NULL;
   }
-  UDateTimePatternGenerator *generator = udatpg_open(NULL, &status);
+  UDateTimePatternGenerator *generator = udatpg_open(scr_intl_locale, &status);
   if (U_FAILURE(status) || generator == NULL) {
     scr_intl_no_data();
     return NULL;
@@ -317,10 +342,23 @@ static ScrStr *scr_intl_format_date(double ms, const char *skeletonText) {
   }
   /* A NULL time zone is ICU's default zone, which is the host's (TZ, else
    * /etc/localtime) — the same zone V8's default formatter uses. */
-  UDateFormat *format = udat_open(UDAT_PATTERN, UDAT_PATTERN, NULL, NULL, 0, pattern, patternLen, &status);
+  UDateFormat *format =
+    udat_open(UDAT_PATTERN, UDAT_PATTERN, scr_intl_locale, NULL, 0, pattern, patternLen, &status);
   if (U_FAILURE(status) || format == NULL) {
     scr_intl_no_data();
     return NULL;
+  }
+  /* ECMAScript time is proleptic Gregorian: V8 moves a Gregorian
+   * calendar's Julian cutover to the start of ECMAScript time, -2^53 ms
+   * (JSDateTimeFormat), so dates before October 1582 keep their Gregorian
+   * fields. A non-Gregorian calendar answers U_UNSUPPORTED_ERROR and keeps
+   * its own rules, as in V8. */
+  UErrorCode calendarStatus = U_ZERO_ERROR;
+  UCalendar *calendar = ucal_clone(udat_getCalendar(format), &calendarStatus);
+  if (U_SUCCESS(calendarStatus) && calendar != NULL) {
+    ucal_setGregorianChange(calendar, -9007199254740992.0, &calendarStatus);
+    if (U_SUCCESS(calendarStatus)) udat_setCalendar(format, calendar);
+    ucal_close(calendar);
   }
   UChar text[256];
   int32_t len = udat_format(format, ms, text, (int32_t)(sizeof text / sizeof *text), NULL, &status);
@@ -393,8 +431,8 @@ static UBreakIterator *scr_icu_word_iterator(const ScrIcuWordSegments *segments)
     return NULL;
   }
   UErrorCode status = U_ZERO_ERROR;
-  UBreakIterator *iter =
-    ubrk_open(UBRK_WORD, segments->locale, segments->text, segments->units, &status);
+  const char *locale = segments->locale != NULL ? segments->locale : scr_intl_locale;
+  UBreakIterator *iter = ubrk_open(UBRK_WORD, locale, segments->text, segments->units, &status);
   if (U_FAILURE(status) || iter == NULL) {
     scr_intl_no_data();
     return NULL;
@@ -421,7 +459,10 @@ static ScrDyn *scr_icu_word_iter_pack(void *ptr) {
   ScrIcuWordSegments *segments = ptr;
   ScrDyn *result = scr_dyn_new_arr();
   UBreakIterator *iter = scr_icu_word_iterator(segments);
-  if (iter == NULL) return NULL;
+  if (iter == NULL) {
+    scr_dyn_release(result);
+    return NULL;
+  }
   int32_t start = ubrk_first(iter);
   for (int32_t end = start < 0 ? -1 : ubrk_next(iter); start >= 0 && end >= 0;
        start = end, end = ubrk_next(iter)) {
@@ -570,8 +611,8 @@ ScrDyn *scr_intl_segmenter_word_new(ScrStr *locale) {
   ScrIcuWordSegmenter *value = calloc(1, sizeof *value);
   if (value == NULL) scr_trap("scriptc: out of memory\n");
   value->rc = 1;
-  /* The empty tag is the absent locale: ICU's NULL selects the default
-   * locale (uloc_getDefault()), which is what V8 negotiates too, while an
+  /* The empty tag is the absent locale: NULL selects the default locale
+   * (scr_intl_default_locale), which is what V8 negotiates too, while an
    * empty locale name would select root. */
   if (locale != NULL && locale->len > 0) {
     size_t len = locale->len;

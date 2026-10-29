@@ -42,6 +42,9 @@ export interface RuntimePackSelection {
   archives: string[];
   /** Files the executable loads at run time, installed beside it. */
   dataFiles: string[];
+  /** The ICU headers an Intl selection ships (manifest `headers`), all under
+   * `<include root>/unicode/`, verified like the other artifacts. */
+  headerFiles: string[];
   systemLibraries: string[];
   dependencyPaths: string[];
   /** Exact installed inputs observed while the selected artifacts were verified. */
@@ -49,6 +52,7 @@ export interface RuntimePackSelection {
   selectedRuntimeArtifacts: RuntimePackArtifact[];
   selectedArchiveArtifacts: RuntimePackArtifact[];
   selectedDataArtifacts: RuntimePackArtifact[];
+  selectedHeaderArtifacts: RuntimePackArtifact[];
 }
 
 async function verifyArtifact(root: string, artifact: RuntimePackArtifact): Promise<string> {
@@ -213,19 +217,26 @@ export async function loadRuntimePack(options: {
   const selectedVariants = selected.runtime;
   const selectedArchives = selected.archives;
   const selectedData = selected.data;
-  const selectedArtifactPaths = [...selectedVariants, ...selectedArchives, ...selectedData].map(
-    (artifact) => join(root, artifact.path),
-  );
+  // The C-source path compiles scr_intl.c against these headers and links
+  // the pack's ICU archive (index.ts runtimePackIcuInputs).
+  const selectedHeaders = features.intl === true ? (manifest.headers ?? []) : [];
+  const selectedArtifactPaths = [
+    ...selectedVariants,
+    ...selectedArchives,
+    ...selectedData,
+    ...selectedHeaders,
+  ].map((artifact) => join(root, artifact.path));
   let artifactDependencies: NativeArtifactDependency[];
   try {
     artifactDependencies = await snapshotDependencies(selectedArtifactPaths);
   } catch {
     throw new RuntimePackError("runtime pack artifact set changed during selection", "invalid");
   }
-  const [runtimeObjects, archives, dataFiles] = await Promise.all([
+  const [runtimeObjects, archives, dataFiles, headerFiles] = await Promise.all([
     Promise.all(selectedVariants.map((artifact) => verifyArtifact(root, artifact))),
     Promise.all(selectedArchives.map((artifact) => verifyArtifact(root, artifact))),
     Promise.all(selectedData.map((artifact) => verifyArtifact(root, artifact))),
+    Promise.all(selectedHeaders.map((artifact) => verifyArtifact(root, artifact))),
   ]);
   await Promise.all(manifest.licenses.map((license) => readFile(join(root, license.path)))).catch(
     () => {
@@ -248,11 +259,20 @@ export async function loadRuntimePack(options: {
     runtimeObjects,
     archives,
     dataFiles,
+    headerFiles,
     systemLibraries: selected.systemLibraries,
-    dependencyPaths: [packagePath, manifestPath, ...runtimeObjects, ...archives, ...dataFiles],
+    dependencyPaths: [
+      packagePath,
+      manifestPath,
+      ...runtimeObjects,
+      ...archives,
+      ...dataFiles,
+      ...headerFiles,
+    ],
     sourceDependencies,
     selectedRuntimeArtifacts: selectedVariants,
     selectedArchiveArtifacts: selectedArchives,
     selectedDataArtifacts: selectedData,
+    selectedHeaderArtifacts: selectedHeaders,
   };
 }

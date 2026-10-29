@@ -20,13 +20,22 @@ console.log(label, label.length, (42).toLocaleString().padStart(8, "."));
 const mapped = xs.map((x) => x.toLocaleString());
 console.log(mapped.join("|"));
 
-// An explicit undefined argument may carry effects and is evaluated first.
+// An explicit undefined argument may carry effects and is evaluated.
 let order = "";
 function undef(value: string): undefined {
   order += value;
   return undefined;
 }
 console.log((1234.5).toLocaleString(undef("a")), order);
+
+// The receiver is read before the argument runs: an argument that writes
+// the receiver's variable does not change the number formatted.
+let receiver = 1234.5;
+function reassign(): undefined {
+  receiver = 99;
+  return undefined;
+}
+console.log(receiver.toLocaleString(reassign()), receiver.toLocaleString());
 
 // The capability probe Node answers from its own ICU build: an Intl program
 // links ICU, so the binary's answer is Node's (the number 1), and reading it

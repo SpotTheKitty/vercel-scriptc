@@ -5,6 +5,8 @@
 
 #include "scr_string.h"
 
+typedef struct ScrDyn ScrDyn; /* full definition in scr_dyn.h (C11 repeat) */
+
 /* ── Intl over ICU4C (scr_intl.c) ─────────────────────────────────────
  * Compiled and linked — with the vendored ICU archive — only into
  * programs whose IR selects the `icu` runtime feature (the `icu.*`

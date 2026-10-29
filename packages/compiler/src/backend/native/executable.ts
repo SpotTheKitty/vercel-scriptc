@@ -128,8 +128,9 @@ interface RuntimeUnitContext {
   tlsArchive: string | null;
   brotliArchive: string | null;
   icuArchive: string | null;
-  /** The fetched ICU release root, for scr_intl.c's headers. */
-  icuSourceDir: string | null;
+  /** The include roots of the ICU headers scr_intl.c compiles against: the
+   * runtime pack's, or the fetched release's common/ and i18n/. */
+  icuIncludeDirs: readonly string[];
 }
 
 /** An optional runtime input: runtime sources compiled when `when` holds,
@@ -252,18 +253,15 @@ const RUNTIME_UNITS: readonly RuntimeUnit[] = [
       : [],
   ),
   // Intl over ICU (scr_intl.c): ICU's C API only, at the default locale,
-  // reading its data file from beside the executable. The ICU headers are
-  // ICU's own source tree (common/unicode/*.h for the core API, and
-  // i18n/unicode/*.h for udat.h and unumberformatter.h), so the include
-  // paths are vendor inputs rather than a copied header set.
+  // reading its data file from beside the executable. The ICU headers come
+  // from the installed runtime pack beside its archive, or, when ICU is
+  // built from its fetched release, from that source tree (common/unicode
+  // for the core API, i18n/unicode for udat.h and unumberformatter.h).
   unitArgs((u) =>
-    u.icuSourceDir === null || u.icuArchive === null
+    u.icuIncludeDirs.length === 0 || u.icuArchive === null
       ? []
       : [
-          "-I",
-          join(u.icuSourceDir, "source", "common"),
-          "-I",
-          join(u.icuSourceDir, "source", "i18n"),
+          ...u.icuIncludeDirs.flatMap((dir) => ["-I", dir]),
           u.rt(join(u.rtDir, "scr_intl.c")),
           u.icuArchive,
         ],
@@ -713,8 +711,14 @@ export async function compileCInternal(
   let brotliArchive = brotli
     ? brotliArchivePath(sanitize, driver, vendorBuildIdentity, vendorCacheRoot)
     : null;
-  let icuArchive = icu ? icuArchivePath(driver, vendorBuildIdentity, vendorCacheRoot) : null;
-  let icuSourceDir: string | null = null;
+  // The installed runtime pack's ICU archive is the one this path would
+  // build (uninstrumented either way), so a pack that ships it and its
+  // headers spares the Zig C++ build and the source download.
+  const icuPack = icu ? (opts.icuPack ?? null) : null;
+  let icuArchive = icu
+    ? (icuPack?.archive ?? icuArchivePath(driver, vendorBuildIdentity, vendorCacheRoot))
+    : null;
+  let icuIncludeDirs: readonly string[] = icuPack === null ? [] : [icuPack.include];
 
   // ours would collide; see scr_regex.c) — the standalone objects are for
   // static builds only.
@@ -769,7 +773,7 @@ export async function compileCInternal(
           : await stageVendorInputs(materialize, join(stageRoot, "brotli"));
       brotliArchive = paths[0]!;
     }
-    if (icu) {
+    if (icu && icuPack === null) {
       const cachedArchive = icuArchivePath(driver, vendorBuildIdentity, materializeCacheRoot);
       protectCachedArtifact(cacheWarmPaths, cachedArchive);
       const materialize = async (): Promise<string[]> => [
@@ -780,7 +784,8 @@ export async function compileCInternal(
           ? await materialize()
           : await stageVendorInputs(materialize, join(stageRoot, "icu"));
       icuArchive = paths[0]!;
-      icuSourceDir = await ensureIcuSources(materializeCacheRoot);
+      const icuSource = join(await ensureIcuSources(materializeCacheRoot), "source");
+      icuIncludeDirs = [join(icuSource, "common"), join(icuSource, "i18n")];
     }
     if (regex) {
       for (const object of lreObjectPaths(
@@ -870,7 +875,7 @@ export async function compileCInternal(
       tlsArchive,
       brotliArchive,
       icuArchive,
-      icuSourceDir,
+      icuIncludeDirs,
     }),
     // A .ll program TU (the LLVM backend) deliberately carries no target
     // triple (byte-stable output; clang supplies the host/SCRIPTC_TARGET

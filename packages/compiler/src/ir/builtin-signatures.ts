@@ -1001,7 +1001,8 @@ function buildLibFnSignatures() {
      * negative inputs rounding to zero. Result +1; never throws. */
     "intl.numFormatEnUs": { argTypes: [F64], result: STRING },
     /** `x.toLocaleString()` at the default locale: the same ICU number
-     * engine V8 uses, over the full ICU data (scr_intl.c). Result +1. */
+     * engine V8 uses, over the full ICU data (scr_intl.c). Throws an Error
+     * when the ICU data file is missing. Result +1. */
     "icu.numFormatDefault": { argTypes: [F64], result: STRING },
     /** `process.config.variables.v8_enable_i18n_support`: the number 1, as
      * Node (which bundles ICU) answers. Reading it selects the `icu`
@@ -1009,7 +1010,8 @@ function buildLibFnSignatures() {
      * carries it (scr_intl.c). */
     "icu.i18nSupport": { argTypes: [], result: F64 },
     /** `d.toLocaleString()` / `d.toLocaleTimeString()` at the default
-     * locale over `d`'s time value (scr_intl.c). Result +1. */
+     * locale over `d`'s time value (scr_intl.c). Throws an Error when the
+     * ICU data file is missing. Result +1. */
     "icu.dateLocaleString": { argTypes: [DATE_T], result: STRING },
     "icu.dateLocaleTimeString": { argTypes: [DATE_T], result: STRING },
     /** ES Symbol values (scr_symbol.c — link-gated by moduleUsesSymbol).

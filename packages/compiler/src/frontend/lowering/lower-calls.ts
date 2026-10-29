@@ -5492,11 +5492,17 @@ function lowerPrimitiveProtoCall(
       const operand = lowerer.lowerExpr(recv);
       if (operand.type.kind !== "f64") return null;
       const stmts: IrStmt[] = [];
+      let formatted: IrExpr = operand;
       if (call.arguments.nodes.length === 1) {
         // An explicit undefined may be any expression that evaluates to it
-        // (a call, a variable), so it still runs — in argument order, before
-        // the formatting. Its unit value has no standalone representation,
-        // so it is coerced into the dynamic slot every argument occupies.
+        // (a call, a variable), so it still runs, after the receiver and
+        // before the formatting: the receiver's value is read first, so an
+        // argument that writes it does not change the number formatted. Its
+        // unit value has no standalone representation, so it is coerced
+        // into the dynamic slot every argument occupies.
+        const receiver = lowerer.declareHiddenLocal("%localeReceiver", F64);
+        stmts.push({ kind: "varDecl", localId: receiver.id, init: operand, loc });
+        formatted = varRef(receiver.id, F64, loc);
         const arg = call.arguments.nodes[0]!;
         const value = lowerer.lowerExpr(arg);
         stmts.push({
@@ -5508,7 +5514,7 @@ function lowerPrimitiveProtoCall(
       const call_: IrExpr = {
         kind: "libCall",
         fn: "icu.numFormatDefault",
-        args: [operand],
+        args: [formatted],
         type: STRING,
         loc,
       };

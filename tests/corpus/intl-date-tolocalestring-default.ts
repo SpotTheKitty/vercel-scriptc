@@ -28,3 +28,14 @@ console.log(invalid.toLocaleString(), "|", invalid.toLocaleTimeString());
 // The results are ordinary strings.
 const label = `Zeit: ${new Date(1700000000000).toLocaleTimeString()}`;
 console.log(label, label.length, new Date(0).toLocaleString().length);
+
+// Dates before the Gregorian reform keep their proleptic Gregorian fields, as
+// in ECMAScript time: 1582-10-04, the year 1000, the year 1, and the earliest
+// time value.
+const early = [Date.UTC(1582, 9, 4, 12), Date.UTC(1582, 9, 15), Date.UTC(1000, 0, 1), -8.64e15];
+const yearOne = new Date(0);
+yearOne.setUTCFullYear(1, 0, 1);
+for (const ms of [...early, yearOne.getTime()]) {
+  const d = new Date(ms);
+  console.log(d.toLocaleString(), "|", d.toLocaleTimeString());
+}

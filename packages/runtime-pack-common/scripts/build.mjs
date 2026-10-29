@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { availableParallelism, tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
@@ -684,6 +684,45 @@ async function build() {
         size: (await stat(destination)).size,
       });
     }
+    // A sanitized build (`--sanitize` in the native compiler) compiles the
+    // runtime units from @scriptc/runtime's sources, and scr_intl.c includes
+    // ICU's C API headers, which that package does not carry. The pack ships
+    // the ICU headers scr_intl.c includes, as the compiler's dependency scan
+    // lists them, under one include root beside the archive.
+    const headers = [];
+    if (requestedArchives.has("icu")) {
+      const icu = join(await icuSourceRoot(), "source");
+      const icuHeaderDirs = [join(icu, "common", "unicode"), join(icu, "i18n", "unicode")];
+      const scan = await run(compiler, [
+        ...compilerArgs,
+        ...commonFlags,
+        "-I",
+        join(icu, "common"),
+        "-I",
+        join(icu, "i18n"),
+        "-MM",
+        join(runtimeSrc, "scr_intl.c"),
+      ]);
+      const included = scan.stdout
+        .replaceAll("\\\n", " ")
+        .split(/\s+/)
+        .filter((path) => icuHeaderDirs.includes(dirname(path)))
+        .sort((a, b) => basename(a).localeCompare(basename(b)));
+      if (included.length === 0) throw new Error("scr_intl.c includes no ICU header");
+      const includeRoot = join(stagedOutputRoot, "vendor", "icu", "include", "unicode");
+      await mkdir(includeRoot, { recursive: true });
+      for (const source of included) {
+        const destination = join(includeRoot, basename(source));
+        if (existsSync(destination))
+          throw new Error(`two ICU headers are named ${basename(source)}`);
+        await copyFile(source, destination);
+        headers.push({
+          path: artifactPath(destination),
+          sha256: await sha256(destination),
+          size: (await stat(destination)).size,
+        });
+      }
+    }
     await assertArtifactsExcludeStrings(
       stagedOutputRoot,
       runtimeForbiddenStrings(config.forbiddenArtifactStrings),
@@ -758,6 +797,7 @@ async function build() {
         predicate: archiveSpecs.get(entry.id).predicate,
       })),
       ...(data.length === 0 ? {} : { data }),
+      ...(headers.length === 0 ? {} : { headers }),
       system_libraries: matrix.system_libraries,
       licenses: licensed.map(([, path, license]) => ({ path, license })),
     };

@@ -79,6 +79,10 @@ export interface RuntimePackManifest {
    * MiB) is the only one; Intl programs copy it, every other program links
    * neither ICU nor its data. */
   data?: RuntimePackArtifact[];
+  /** C headers under one include root (`<root>/unicode/*.h`): the ICU C API
+   * headers scr_intl.c includes, which a sanitized build compiles that unit
+   * against (native/sanitizer.ts). Only a pack that ships ICU lists them. */
+  headers?: RuntimePackArtifact[];
   system_libraries: { name: string; predicate: RuntimePredicate }[];
   licenses: { path: string; license: string }[];
 }
@@ -252,6 +256,8 @@ export function parseRuntimePackManifest(value: unknown): RuntimePackManifest {
     }) ||
     (manifest.data !== undefined &&
       (!Array.isArray(manifest.data) || !manifest.data.every(validArtifact))) ||
+    (manifest.headers !== undefined &&
+      (!Array.isArray(manifest.headers) || !manifest.headers.every(validArtifact))) ||
     !Array.isArray(manifest.system_libraries) ||
     !manifest.system_libraries.every((raw) => {
       const library = object(raw);
