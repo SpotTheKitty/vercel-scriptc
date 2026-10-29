@@ -346,6 +346,9 @@ const RUNTIME_UNITS: readonly RuntimeUnit[] = [
   unit((u) => u.opts.dgram && u.opts.dgramDyn, "scr_dgram_dyn.c"),
   unit((u) => u.opts.textCodecDyn, "scr_text_codec_dyn.c"),
   unit((u) => u.opts.watch, "scr_watch.c"),
+  // fs.watchFile's stat poller: its own gated unit (no loop hook — the
+  // re-armed timers are the liveness), linked only by programs that poll.
+  unit((u) => u.opts.watchFile, "scr_watch_file.c"),
   unit((u) => u.opts.foreignFfi, "scr_ffi_queue.c"),
   unit((u) => u.opts.nodeTest, "scr_test.c"),
   unit((u) => u.opts.webcrypto, "scr_webcrypto.c"),
@@ -425,6 +428,8 @@ const RUNTIME_DEFINES: readonly {
   { define: "SCR_NATIVE_REACTIONS", when: (opts) => opts.webStreams },
   { define: "SCR_HANDLE_CLASSES", when: (opts) => opts.webStreams },
   { define: "SCR_YIN", when: (opts) => opts.youngNursery },
+  // scr_lib.c's path stat and zero Stats for the fs.watchFile poll.
+  { define: "SCR_FS_WATCH_FILE", when: (opts) => opts.watchFile },
   { define: "SCR_NODE_ISLANDS", when: (opts) => opts.nodeIsland },
 ];
 

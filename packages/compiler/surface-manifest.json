@@ -1280,6 +1280,13 @@
       "status": "static"
     },
     {
+      "id": "node-builtin.fs.unwatchFile",
+      "kind": "node-builtin",
+      "name": "fs.unwatchFile",
+      "status": "static",
+      "note": "removes one listener, or every listener, from a resolved path's poller"
+    },
+    {
       "id": "node-builtin.fs.utimesSync",
       "kind": "node-builtin",
       "name": "fs.utimesSync",
@@ -1290,6 +1297,13 @@
       "kind": "node-builtin",
       "name": "fs.watch",
       "status": "static"
+    },
+    {
+      "id": "node-builtin.fs.watchFile",
+      "kind": "node-builtin",
+      "name": "fs.watchFile",
+      "status": "static",
+      "note": "stat polling of a resolved path with Stats listeners, in statement position; bigint: true is refused"
     },
     {
       "id": "node-builtin.fs.writeFileSync",

@@ -6208,6 +6208,35 @@ ScrStats *scr_fs_fstat(double fd) {
   return s;
 }
 
+#ifdef SCR_FS_WATCH_FILE
+/* fs.watchFile's poll (scr_watch_file.c calls this): stat(2) following
+ * symlinks, libuv's uv_fs_stat — NULL with *error = errno on failure,
+ * never throwing, because a failed poll IS a reportable event. +1. */
+ScrStats *scr_stats_poll_path(ScrStr *path, int *error) {
+  if (!scr_fs_path_ok(path, "path")) {
+    *error = EINVAL;
+    return NULL;
+  }
+#ifdef _WIN32
+  /* The CRT snapshot states what the probe can see without opening a
+   * handle: the poll needs the errno, not Win32's extended attributes. */
+  struct stat st;
+  if (stat(path->data, &st) != 0) {
+    *error = errno;
+    return NULL;
+  }
+  return scr_stats_of_crt(&st);
+#else
+  return scr_stats_posix(path->data, -1, false, error);
+#endif
+}
+
+/* The all-zero Stats a failed poll reports (Node's kZeroStats): every
+ * field 0, so isFile()/isDirectory() and the size/date reads all answer
+ * zero/false. +1. */
+ScrStats *scr_stats_zero(void) { return scr_stats_new(); }
+#endif /* SCR_FS_WATCH_FILE */
+
 /* ── Stats objects ───────────────────────────────────────────────────
  * Node's Stats and BigIntStats over a snapshot. The integers and the *Ms
  * fields (and BigIntStats' *Ns fields) are own properties in the binding's

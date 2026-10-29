@@ -1081,6 +1081,9 @@ const RUNTIME_FEATURE_RULES = {
   fetch: rule({ prefixes: ["fetch."] }),
   fileHandle: rule({ types: ["fileHandle"] }),
   fsWatch: rule({ prefixes: ["fs.watch", "watcher."], types: ["fsWatcher"] }),
+  /** fs.watchFile / fs.unwatchFile (scr_watch_file.c): the stat-polling
+   * half of the watching surface, gated on its own unit. */
+  fsWatchFile: rule({ fns: ["fs.watchFile", "fs.unwatchFile"] }),
   /** A socket 'lookup' listener: the C main installs the net unit's
    * lookup records (scr_net_lookup_install). */
   netLookup: rule({ fns: ["net.sockOnLookup"] }),
@@ -1302,6 +1305,7 @@ function noRuntimeFeatures(): RuntimeFeatures {
     fetch: false,
     fileHandle: false,
     fsWatch: false,
+    fsWatchFile: false,
     http2: false,
     http: false,
     inspect: false,
@@ -1645,6 +1649,15 @@ export function moduleUsesParseArgs(mod: IrModule): boolean {
  * link line. Same generic-walk shape as moduleUsesZlib. */
 export function moduleUsesFsWatch(mod: IrModule): boolean {
   return scanRuntimeFeatures(mod, "fsWatch").fsWatch;
+}
+
+/** True when the module contains an fs.watchFile/fs.unwatchFile libCall —
+ * the link switch that pulls scr_watch_file.c into the binary and has the
+ * emitted main call scr_watch_file_install (the moduleUsesFsWatch
+ * precedent, one unit of its own). Programs that never poll pay zero bytes
+ * and keep their exact link line. */
+export function moduleUsesFsWatchFile(mod: IrModule): boolean {
+  return scanRuntimeFeatures(mod, "fsWatchFile").fsWatchFile;
 }
 
 /** True when the module contains any test.* libCall or a testCtx handle
