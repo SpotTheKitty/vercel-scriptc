@@ -1,0 +1,6 @@
+{
+ "order": [
+  "<repo>/tests/corpus/8641-emitter-leak-warning-exit.cjs"
+ ],
+ "diags": []
+}
