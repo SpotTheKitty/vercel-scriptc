@@ -34,6 +34,12 @@ export interface NativeLinkFeatures {
   /** The program uses process.stdin.setEncoding, string 'data' listeners
    * or stdio 'resize' events: links the SCR_STDIO_EXTENDED events unit. */
   stdioExtended?: boolean;
+  /** A write completion callback takes the error argument: links the
+   * SCR_STREAM_WRITE_ERRORS build of the stream unit. */
+  streamWriteErrors?: boolean;
+  /** The program reaches the process output streams' write slot: links the
+   * SCR_STDIO_WRITE_SLOT build of the events unit. */
+  stdioWriteSlot?: boolean;
   /** Calls into Node.js (@scriptc/node): scr_node_island.c and the
    * SCR_NODE_ISLANDS variant of the event loop unit. */
   nodeIsland?: boolean;
@@ -43,6 +49,9 @@ export interface NativeLinkFeatures {
   /** A module namespace boxed for typed code links
    * scr_module_namespace_dyn.c; absent (false) otherwise. */
   moduleNamespaceDyn?: boolean;
+  /** Primitive wrapper objects link scr_js_wrapper.c; absent (false)
+   * otherwise. */
+  primitiveWrapper?: boolean;
   zlib: boolean;
   /** node:zlib's Brotli forms: scr_brotli.c and the vendored brotli archive. */
   brotli?: boolean;

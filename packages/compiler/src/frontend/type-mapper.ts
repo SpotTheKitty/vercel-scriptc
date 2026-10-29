@@ -1407,6 +1407,11 @@ export type TypeParamTsResolver = (t: ts.Type) => ts.Type | null;
  * once per Lowerer and threaded through the recursion — adding a hook means
  * one new field here, not a new parameter at every call site. */
 export interface TypeMapperCtx {
+  /** Whether the program creates primitive wrapper objects
+   * (primitive-wrappers.ts): then the boxed interface types (`String`,
+   * `Number`, `Boolean`) map to the checked-dynamic value instead of the
+   * primitive. Absent or false: every mapping is unchanged. */
+  primitiveWrappers?: () => boolean;
   /** Node islands (scope-B NI-4): whether a type's values are island
    * handles, which map to the `foreign` type (a dyn value). Absent in
    * programs without islands. */
@@ -2446,6 +2451,9 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
         ts.symbolName(boxSym) === "Boolean") &&
       boxSym.declarations.some((d) => ctx.isStdlibFile(ts.getSourceFileOfNode(d)))
     ) {
+      // Once the program creates wrapper objects, a slot of the boxed type
+      // may hold one: the checked-dynamic value holds both.
+      if (ctx.primitiveWrappers?.()) return DYN;
       return ts.symbolName(boxSym) === "Number"
         ? F64
         : ts.symbolName(boxSym) === "String"
@@ -5189,6 +5197,12 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   // AsyncLocalStorage.snapshot()'s generic runner is a dyn function value
   // (als.snapshot), called through the dyn call path.
   if (callSigs.length === 1 && isAsyncLocalStorageSnapshot(callSigs[0]!, ctx)) return DYN;
+  // A process/net/stream `write` method taken as a value (`typeof
+  // process.stdout.write`, the saved original of an output guard): its
+  // overload set has no single compiled signature, and the value is the
+  // stream's replaceable method slot, so it is the checked-dynamic function
+  // the stream object hands out (scr_events.c ProcessStream).
+  if (callSigs.length > 1 && isStdlibStreamWriteOverloads(callSigs, ctx)) return DYN;
   if (callSigs.length === 1) return mapCallSignature(callSigs[0]!, ctx);
   // Records: object types whose members are all data properties (shorthand
   // methods in type position count — they're func-typed fields) with
@@ -5601,6 +5615,36 @@ function isAsyncLocalStorageSnapshot(sig: ts.Signature, ctx: TypeMapperCtx): boo
     ctx.isStdlibFile(ts.getSourceFileOfNode(decl)) &&
     isDeclaredInAmbientModule(decl, "async_hooks")
   );
+}
+
+const STREAM_WRITE_OWNERS = new Set(["Socket", "Writable", "WriteStream", "WritableStream"]);
+
+/** Every signature is a `write` method declared on a standard-library
+ * stream interface or class (net.Socket, stream.Writable, tty.WriteStream,
+ * NodeJS.WritableStream) — @types/node's or the fallback declarations'. */
+function isStdlibStreamWriteOverloads(
+  sigs: readonly ts.Signature[],
+  ctx: Pick<TypeMapperCtx, "isStdlibFile">,
+): boolean {
+  return sigs.every((sig) => {
+    const decl = sig.declaration;
+    if (
+      decl === undefined ||
+      !(ts.isMethodSignatureDeclaration(decl) || ts.isMethodDeclaration(decl))
+    )
+      return false;
+    if (!ts.isIdentifier(decl.name) || decl.name.text !== "write") return false;
+    const owner = decl.parent;
+    const ownerName =
+      owner !== undefined && (ts.isInterfaceDeclaration(owner) || ts.isClassDeclaration(owner))
+        ? (owner.name?.text ?? null)
+        : null;
+    return (
+      ownerName !== null &&
+      STREAM_WRITE_OWNERS.has(ownerName) &&
+      ctx.isStdlibFile(ts.getSourceFileOfNode(decl))
+    );
+  });
 }
 
 function mapCallSignature(sig: ts.Signature, ctx: TypeMapperCtx): IrType | null {

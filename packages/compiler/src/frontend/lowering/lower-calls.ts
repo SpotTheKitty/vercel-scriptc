@@ -1,3 +1,4 @@
+import { programCreatesWrappers } from "./primitive-wrappers.js";
 import {
   arrayClassMemberOwner,
   arrayClassReceiver,
@@ -5,6 +6,7 @@ import {
 } from "./builtins/array-classes.js";
 import { structuralCallInstance } from "./structural-instances.js";
 import { checkedPrivateMethodReceiver, privateNameClass } from "./private-brands.js";
+import { lowerStaticPrivateCall } from "./private-statics.js";
 import { assertFunctionAliasOf } from "./lower-assert.js";
 import { keyedHelperName } from "./stable-names.js";
 import { perKeyOrder } from "./key-order-witness.js";
@@ -690,6 +692,8 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
     ts.isPrivateIdentifier(expr.expression.name) &&
     !expr.expression.questionDotToken
   ) {
+    const staticPrivate = lowerStaticPrivateCall(lowerer, expr, expr.expression);
+    if (staticPrivate) return staticPrivate;
     const privateCall = lowerCheckedPrivateMethodCall(lowerer, expr, expr.expression);
     if (privateCall) return privateCall;
   }
@@ -2145,7 +2149,7 @@ function callableInstanceStringCall(
 
 /** A call through an evaluated callee value: checked-dynamic callees,
  * function unions, typed-rest and runtime-arity closures. */
-function lowerCallThroughValue(
+export function lowerCallThroughValue(
   lowerer: Lowerer,
   expr: ts.CallExpression,
   callee: IrExpr,
@@ -4066,7 +4070,9 @@ function lowerDynReceiverMethodCall(
     // else calls its member as Node does.
     if (
       (checkerUntyped ||
-        (lowerer.typeOf(access).flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) &&
+        (lowerer.typeOf(access).flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0 ||
+        // A receiver of the boxed String type may be a wrapper object.
+        (lowerer.createsWrappers ??= programCreatesWrappers(lowerer))) &&
       !call.questionDotToken &&
       !access.questionDotToken &&
       !call.arguments.nodes.some(ts.isSpreadElement)
@@ -4310,7 +4316,24 @@ function lowerStringOrMemberCall(
   const loc = locOf(call);
   const receiverLocal = lowerer.declareHiddenLocal("%dynCallReceiver", DYN);
   const receiver = varRef(receiverLocal.id, DYN, loc);
-  const isString: IrExpr = { kind: "dynTest", test: "string", value: receiver, type: BOOL, loc };
+  const nameLit: IrExpr = { kind: "strLit", value: access.name.text, type: STRING, loc };
+  const receiverIsString: IrExpr = {
+    kind: "dynTest",
+    test: "string",
+    value: receiver,
+    type: BOOL,
+    loc,
+  };
+  // In a program that creates wrapper objects, a receiver whose member is
+  // the builtin String.prototype method runs the string lowering on
+  // ToString of the receiver, after the arguments, as the builtin does.
+  // The member is read once: the check inspects the value the call read.
+  const wrappers = (lowerer.createsWrappers ??= programCreatesWrappers(lowerer));
+  const builtinLocal = wrappers ? lowerer.declareHiddenLocal("%dynCallStringMethod", BOOL) : null;
+  const isString: IrExpr = builtinLocal
+    ? { kind: "varRef", localId: builtinLocal.id, type: BOOL, loc }
+    : receiverIsString;
+  const stringLocal = wrappers ? lowerer.declareHiddenLocal("%dynCallString", DYN) : null;
   const calleeLocal = lowerer.declareHiddenLocal("%dynCallCallee", DYN);
   const callee = varRef(calleeLocal.id, DYN, loc);
   const stmts: IrStmt[] = [
@@ -4320,7 +4343,7 @@ function lowerStringOrMemberCall(
       localId: calleeLocal.id,
       init: {
         kind: "ternary",
-        cond: isString,
+        cond: receiverIsString,
         then: dynUndefinedExpr(loc),
         else_: {
           kind: "dynKeyGet",
@@ -4334,16 +4357,53 @@ function lowerStringOrMemberCall(
       },
       loc,
     },
+    ...(builtinLocal
+      ? [
+          {
+            kind: "varDecl" as const,
+            localId: builtinLocal.id,
+            init: {
+              kind: "logical" as const,
+              op: "||" as const,
+              left: receiverIsString,
+              right: {
+                kind: "libCall" as const,
+                fn: "wrapper.isStringMethod" as const,
+                args: [callee, nameLit],
+                type: BOOL,
+                loc,
+              },
+              type: BOOL,
+              loc,
+            },
+            loc,
+          },
+        ]
+      : []),
   ];
   const args = call.arguments.nodes.map((node) => {
-    const value = lowerer.lowerExpr(node);
+    const lowered = lowerer.lowerExpr(node);
+    // A unit-typed argument (`f()` of a void function, a literal undefined
+    // or null) has no local storage of its own: hold it as the dynamic
+    // value both branches receive.
+    const value =
+      lowered.type.kind === "void" ||
+      lowered.type.kind === "undefinedT" ||
+      lowered.type.kind === "nullT"
+        ? lowerer.coerceToExpected(lowered, DYN)
+        : lowered;
     const local = lowerer.declareHiddenLocal("%dynCallArg", value.type);
     stmts.push({ kind: "varDecl", localId: local.id, init: value, loc: value.loc });
     return { node, value: varRef(local.id, value.type, value.loc) };
   });
   // String.prototype methods ignore arguments past the ones they read.
   const arity = DYN_STRING_ONLY_ARITY[access.name.text] ?? call.arguments.nodes.length;
-  const stringReceiver = (): IrExpr => ({ kind: "dynCheck", value: receiver, type: STRING, loc });
+  const stringReceiver = (): IrExpr => ({
+    kind: "dynCheck",
+    value: stringLocal ? varRef(stringLocal.id, DYN, loc) : receiver,
+    type: STRING,
+    loc,
+  });
   const lowerString = (): IrExpr | null =>
     (call.arguments.nodes.length <= arity
       ? lowerRegexMethodCall(lowerer, call, access, stringReceiver)
@@ -4372,7 +4432,35 @@ function lowerStringOrMemberCall(
       kind: "ternary",
       cond: isString,
       then: stringCall
-        ? lowerer.coerceToExpected(stringCall, DYN)
+        ? stringLocal
+          ? {
+              kind: "seqExpr",
+              stmts: [
+                {
+                  kind: "varDecl",
+                  localId: stringLocal.id,
+                  init: {
+                    kind: "ternary",
+                    cond: receiverIsString,
+                    then: receiver,
+                    else_: {
+                      kind: "libCall",
+                      fn: "wrapper.thisString",
+                      args: [receiver, nameLit],
+                      type: DYN,
+                      loc,
+                    },
+                    type: DYN,
+                    loc,
+                  },
+                  loc,
+                },
+              ],
+              result: lowerer.coerceToExpected(stringCall, DYN),
+              type: DYN,
+              loc,
+            }
+          : lowerer.coerceToExpected(stringCall, DYN)
         : nodeThrowExpr(
             0,
             "SC1090",

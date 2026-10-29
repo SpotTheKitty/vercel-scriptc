@@ -1,8 +1,15 @@
+import { lowerStaticPrivateAssignment } from "./private-statics.js";
 import type { DiagnosticCode } from "../../diagnostics/codes.js";
 import { keepsInitializerLayout, notePreservedLayout } from "./structural-instances.js";
 import { jsGlobalValueByName } from "./global-values.js";
 import { lowerTupleAliasDecl, stripTypeWrappers } from "./typed-arguments.js";
-import { islandHandleBinding, lowerIslandExpr, lowerIslandSubclass } from "./lower-node-island.js";
+import {
+  islandHandleBinding,
+  lowerIslandExpr,
+  isIslandRequireSpec,
+  lowerIslandRequireAtStatement,
+  lowerIslandSubclass,
+} from "./lower-node-island.js";
 import { isIslandSubclassDecl } from "../../node-islands/boundary.js";
 import {
   allBytesArms,
@@ -25,7 +32,7 @@ import {
   matchAllRowsReadByElements,
   storedMatchAllRowsReadByElements,
 } from "./containers/match-row-uses.js";
-import { dynUndefinedExpr, nodeThrowExpr, numLit, varRef } from "../../ir/build.js";
+import { dynUndefinedExpr, nodeThrowExpr, numLit, strLit, varRef } from "../../ir/build.js";
 import { runtimeKeyPatternRead } from "./expressions/keyed-field-targets.js";
 import { declaresHoistedBinding, staticCondition } from "./static-typeof.js";
 import { lowerCollectionSpread } from "./containers/collection-methods.js";
@@ -961,8 +968,8 @@ function lowerOneStatement(
   if (deferFences && lowerer.diagSink === null && lowerer.diags.length > diagsBefore) {
     const flushed = lowerer.diags.splice(diagsBefore);
     const ice = flushed.filter((d) => d.code === "SC9001");
-    lowerer.diags.push(...ice);
-    lowerer.runtimeFences.push(...flushed.filter((d) => d.code !== "SC9001"));
+    for (const d of ice) lowerer.diags.push(d);
+    for (const d of flushed) if (d.code !== "SC9001") lowerer.runtimeFences.push(d);
   }
 }
 
@@ -1222,7 +1229,10 @@ export function predeclareForwardFnDecl(lowerer: Lowerer, symbol: ts.Symbol): bo
       entry.out.push(lowerer.lowerNestedFunctionDecl(decl));
     } catch (e) {
       entry.ctx.hoistedFnDecls.delete(decl);
-      if (previousSink !== null) previousSink.push(...lowerer.diags.splice(diagsBefore));
+      if (previousSink !== null) {
+        const flushed = lowerer.diags.splice(diagsBefore);
+        for (const d of flushed) previousSink.push(d);
+      }
       throw e;
     } finally {
       lowerer.diagSink = previousSink;
@@ -2177,6 +2187,10 @@ function lowerVarDeclarator(
     const spec = requireSpecOf(decl.initializer)!;
     if (lowerer.externalTypes.has(spec)) lowerer.externalHostFence(spec, decl, false);
     if (ts.isSourceFile(stmt.parent)) {
+      // `const x = require("<island>")` and `const { name } = …`: the
+      // island module loads here, at the statement (lower-node-island.ts).
+      const island = lowerIslandRequireAtStatement(lowerer, decl);
+      if (island !== null) return [island];
       const init = lowerer.requireInitStmt(spec, decl);
       const out: IrStmt[] = init ? [init] : [];
       // Nested patterns destructure the named export's value right after
@@ -2201,6 +2215,12 @@ function lowerVarDeclarator(
     // same routing top-level requires use, and no statement remains.
     // Relative requires keep the fence: their module-init-at-position
     // semantics needs storage this model doesn't represent.
+    // A nested require of an island package is an ordinary binding of the
+    // island module, loaded at the statement (lower-node-island.ts).
+    if (isIslandRequireSpec(lowerer, ts.getSourceFileOfNode(decl).fileName, spec)) {
+      const lowered = lowerer.lowerVarDecl(decl, isLet);
+      return lowered ? [lowered] : [];
+    }
     if (canonicalBuiltinModule(spec) !== null) {
       return canonicalBuiltinModule(spec) === "punycode"
         ? [lowerer.punycodeRequireWarning(decl)]
@@ -6537,6 +6557,12 @@ export function lowerVarDecl(
     type = init.type;
     notePreservedLayout(lowerer, decl);
   }
+  // A JavaScript binding assigned values outside its declared type
+  // (analyzeJsWidenedBindings in lowerer.ts) holds them as checked-dynamic.
+  {
+    const symbol = lowerer.resolveValueSymbol(decl.name);
+    if (symbol && lowerer.jsWidenedBindings.has(symbol)) type = DYN;
+  }
   // A typed-arguments function expression (typed-arguments.ts): the
   // checker types the binding variadic, but its value has the fixed
   // signature every use asserts.
@@ -8707,6 +8733,9 @@ export function lowerExprStatement(lowerer: Lowerer, expr: ts.Expression): IrStm
       if (urlWrite) return { kind: "exprStmt", expr: urlWrite, loc: locOf(expr) };
     }
     if (opKind === ts.SyntaxKind.EqualsToken) {
+      const staticPrivateWrite = lowerStaticPrivateAssignment(lowerer, expr);
+      if (staticPrivateWrite)
+        return { kind: "exprStmt", expr: staticPrivateWrite, loc: locOf(expr) };
       const callableWrite = lowerNativeFunctionAssignment(lowerer, expr);
       if (callableWrite) return { kind: "exprStmt", expr: callableWrite, loc: locOf(expr) };
       // Expando function members (`foo.bar = 12`, `foo[SYM] = v` on a
@@ -9301,6 +9330,39 @@ export function lowerExprStatement(lowerer: Lowerer, expr: ts.Expression): IrStm
             localId: g.id,
             value: lowerer.lowerExprExpecting(expr.right, g.type),
             loc: locOf(expr),
+          };
+        }
+      }
+      // process.stdout.write = fn (and stderr): replace the stream object's
+      // write slot. Every later write to the stream — console output, typed
+      // write calls (programPatchesStdio), runtime writers — goes through it.
+      if (ts.isPropertyAccessExpression(expr.left) && expr.left.name.text === "write") {
+        const recv = expr.left.expression;
+        const stream = ts.isPropertyAccessExpression(recv)
+          ? lowerer.stdlibGlobalMember(recv, "process")
+          : null;
+        if (stream === "stdout" || stream === "stderr") {
+          const loc = locOf(expr);
+          return {
+            kind: "exprStmt",
+            expr: {
+              kind: "libCall",
+              fn: "dyn.keySet",
+              args: [
+                {
+                  kind: "libCall",
+                  fn: "process.stdioSlot",
+                  args: [numLit(stream === "stdout" ? 1 : 2, loc)],
+                  type: DYN,
+                  loc,
+                },
+                strLit("write", locOf(expr.left.name)),
+                lowerer.lowerExprExpecting(expr.right, DYN),
+              ],
+              type: VOID,
+              loc,
+            },
+            loc,
           };
         }
       }

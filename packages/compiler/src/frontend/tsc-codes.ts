@@ -139,6 +139,9 @@ export const JS_RELAXED_TSC_CODES: ReadonlySet<number> = new Set([
   // differs (adopted options, hidden declaration twins), and an unused
   // suppression changes nothing at runtime
   2578,
+  // a primitive on the left of instanceof (`"x" instanceof String`): Node
+  // answers false, which the lowering folds
+  2358,
   // a lib-floor demand (es2024+ members under the es2023 lib): the member
   // types as the error-any and its use fences per site with the honest
   // no-lowering story instead of gating the whole program
@@ -163,6 +166,16 @@ export const JS_RELAXED_TSC_CODES: ReadonlySet<number> = new Set([
   // binding types as any and reached uses fence instead of passing unchecked
   2307,
   2792,
+  // a write to a property declarations mark readonly (2540): `readonly` is
+  // a type annotation that Node never sees (Next.js's types mark
+  // process.env.NODE_ENV readonly; its server.js assigns it); the write
+  // lowers like any other and keeps its runtime behavior
+  2540,
+  // a resolved JavaScript module without declarations (7016): Node loads
+  // it like any other module; deployment trees such as Next.js standalone
+  // output ship runtime files only, so the binding types as any and its
+  // uses take the dynamic paths, as for 2307
+  7016,
   // `delete` of a property the inference typed required (2790): JS deletes
   // any configurable property, and the lowering checks each delete's
   // receiver itself

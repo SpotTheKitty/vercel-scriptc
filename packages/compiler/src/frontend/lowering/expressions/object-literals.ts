@@ -2566,7 +2566,7 @@ export function lowerObjectLiteral(
       ) {
         throw err;
       }
-      lowerer.runtimeFences.push(...lowerer.diags.splice(propDiagsBefore));
+      for (const d of lowerer.diags.splice(propDiagsBefore)) lowerer.runtimeFences.push(d);
       droppedNames.add(name);
       continue;
     }

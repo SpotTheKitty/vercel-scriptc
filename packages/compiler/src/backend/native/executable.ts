@@ -221,6 +221,8 @@ const RUNTIME_UNITS: readonly RuntimeUnit[] = [
   unit((u) => u.opts.moduleNamespace === true, "scr_module_namespace.c"),
   // A module namespace as the frozen null-prototype object typed code sees.
   unit((u) => u.opts.moduleNamespaceDyn === true, "scr_module_namespace_dyn.c"),
+  // Primitive wrapper objects (new String/Number/Boolean, Object(primitive)).
+  unit((u) => u.opts.primitiveWrapper === true, "scr_js_wrapper.c"),
   unit(
     (u) =>
       u.opts.dynAsync ||
@@ -415,6 +417,7 @@ const RUNTIME_UNITS: readonly RuntimeUnit[] = [
     "scr_node_island_handle.c",
     "scr_node_island_export.c",
     "scr_node_island_boot.c",
+    "scr_node_island_gc.c",
   ),
   // Readable.fromWeb reads a web ReadableStream through its reader.
   unit((u) => u.nativeFetch && u.opts.stream, "scr_stream_from_web.c"),
@@ -443,6 +446,11 @@ const RUNTIME_DEFINES: readonly {
   { define: "SCR_JS_TIER", when: (opts) => opts.dynTier === true },
   { define: "SCR_WARNING_REPLACE", when: (opts) => opts.warningReplace },
   { define: "SCR_STDIO_EXTENDED", when: (opts) => opts.stdioExtended },
+  // scr_stream.c's write-callback error publication, which the compiler's
+  // error-first write adapter reads.
+  { define: "SCR_STREAM_WRITE_ERRORS", when: (opts) => opts.streamWriteErrors },
+  // scr_events.c's typed process output write slot.
+  { define: "SCR_STDIO_WRITE_SLOT", when: (opts) => opts.stdioWriteSlot },
   // scr_async.c's native promise reactions, which the web streams unit uses,
   // scr_json.c's and scr_dyn_builtin_class.c's instanceof over its classes,
   // and scr_fetch.c's bodies of its streams.

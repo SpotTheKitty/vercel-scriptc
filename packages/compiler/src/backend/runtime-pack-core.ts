@@ -110,10 +110,17 @@ export interface RuntimeFeatureSet extends NativeLinkFeatures {
   computedRequire: boolean;
   warningReplace: boolean;
   stdioExtended: boolean;
+  /** The program's write completion callbacks take the error argument:
+   * the SCR_STREAM_WRITE_ERRORS build of the stream unit. */
+  streamWriteErrors: boolean;
+  /** The program reaches the process output streams' write slot: the
+   * SCR_STDIO_WRITE_SLOT build of the events unit. */
+  stdioWriteSlot: boolean;
   nodeIsland: boolean;
   brotli: boolean;
   moduleNamespace: boolean;
   moduleNamespaceDyn: boolean;
+  primitiveWrapper: boolean;
   nativeFetch: boolean;
   abortSignalOnly: boolean;
   netEffective: boolean;
@@ -325,10 +332,13 @@ export function effectiveRuntimeFeatures(
     computedRequire: features.computedRequire === true,
     warningReplace: features.warningReplace === true,
     stdioExtended: features.stdioExtended === true,
+    streamWriteErrors: features.streamWriteErrors === true,
+    stdioWriteSlot: features.stdioWriteSlot === true,
     nodeIsland: features.nodeIsland === true,
     brotli: features.brotli === true,
     moduleNamespace: features.moduleNamespace === true,
     moduleNamespaceDyn: features.moduleNamespaceDyn === true,
+    primitiveWrapper: features.primitiveWrapper === true,
     nativeFetch,
     // The fetch unit has AbortController and AbortSignal; scr_abort.c is
     // the same implementation without the fetch transport.

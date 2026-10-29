@@ -977,7 +977,7 @@ function loadProgram7(
       );
       if (extraRoots.length === 0) break;
       program.dispose();
-      programRoots.push(...extraRoots);
+      for (const root of extraRoots) programRoots.push(root);
       program = host.createProgram([...programRoots, overridesDtsPath()], options);
       if (pass === 31) throw new Error("static program-root discovery did not converge");
     }
@@ -1529,8 +1529,16 @@ function suppressedJsStrictness7(d: ts.Diagnostic): boolean {
   // runtime meaning in a JS file.
   if (d.code >= 8000 && d.code <= 8999) return true;
   if (JS_ANY_OPERATOR_CODES.has(d.code)) {
-    return ts.flattenDiagnosticMessageText(d, "\n").includes("'any'");
+    const text = ts.flattenDiagnosticMessageText(d, "\n");
+    // A primitive wrapper operand (`new Number(1) * 2`): the operator
+    // converts it with ToPrimitive, as for any object.
+    return text.includes("'any'") || /'(Number|String|Boolean)'/.test(text);
   }
+  // An index write on a String wrapper (`new String("ab")[5] = "q"`): Node
+  // adds the property past the end and ignores writes to the read-only
+  // index properties (sloppy) or throws (strict), as the object does.
+  if (d.code === 2542 && ts.flattenDiagnosticMessageText(d, "\n").includes("type 'String'"))
+    return true;
   // The deprecated Buffer(...) call without `new`, which Node's Buffer
   // function accepts (containers/bytes.ts lowers it), and fs.ReadStream(...)
   // and fs.WriteStream(...), which construct their stream
@@ -4727,7 +4735,7 @@ function cycleReachedDeferredReferences7(
     if (symbol === undefined) continue;
     const units = unitsOfName.get(name)!;
     unitsBySymbol.set(symbol, [...(unitsBySymbol.get(symbol) ?? []), ...units]);
-    allUnits.push(...units);
+    for (const unit of units) allUnits.push(unit);
   }
   // A named class expression's inner name (`class Impl { static x =
   // Impl.m(); }`) names the class inside its own body, as the binding it
@@ -4896,7 +4904,7 @@ export function moduleEarlyBindings(
   const out: CycleEarlyBinding[] = [];
   for (const sf of order) {
     if (sf.isDeclarationFile || exact.has(sf)) continue;
-    out.push(...moduleEarlyBindingsOf7(program, sf, order));
+    for (const binding of moduleEarlyBindingsOf7(program, sf, order)) out.push(binding);
   }
   program.analysis.moduleEarlyBindings = { key, bindings: out };
   return out;

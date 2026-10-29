@@ -647,6 +647,8 @@ const PROCESS_EVENT_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "process.onExit",
   "process.onSignal",
   "process.stdio",
+  "process.stdioSlot",
+  "process.stdioWriteDyn",
   "stdin.nextChunk",
   "stdin.onData",
   "stdin.onEnd",
@@ -975,6 +977,11 @@ const RUNTIME_FEATURE_RULES = {
       "webstream.class",
       "webstream.instanceOf",
       "webstream.install",
+      // scr_js_wrapper.c answers other values' tags through
+      // scr_dyn_object_tag_of, and its prototype methods call scr_dyn_invoke.
+      "wrapper.objectTag",
+      "wrapper.new",
+      "wrapper.toObject",
     ],
     // Constant-key reads of Object.prototype member names answer the
     // inherited member through scr_dyn_invoke.c.
@@ -1209,6 +1216,18 @@ const RUNTIME_FEATURE_RULES = {
       (node.kind === "dynInvoke" && STDIO_EXTENDED_NAMES.has(node.method)) ||
       (node.kind === "strLit" && STDIO_EXTENDED_NAMES.has(node.value)),
   }),
+  /** A write completion callback that takes the error argument lowers
+   * through writable.writeEcb: the SCR_STREAM_WRITE_ERRORS stream unit
+   * publishes the error the adapter delivers. */
+  streamWriteErrors: rule({ fns: ["writable.writeEcb"] }),
+  /** The program reaches the process output streams' write slot — the
+   * write method as a value (process.stdioSlot), its replacement, a patched
+   * program's typed writes, or a run-time-typed chunk
+   * (process.stdioWriteDyn): the SCR_STDIO_WRITE_SLOT build of the events
+   * unit carries the shared write body, the dynamic-chunk entry point and
+   * Node's anonymous write function. Every other program links the default
+   * object, byte for byte. */
+  stdioWriteSlot: rule({ fns: ["process.stdioSlot", "process.stdioWriteDyn"] }),
   stream: rule({
     initial: (mod) => (mod.classes ?? []).some((c) => RUNTIME_STREAM_CLASSES.has(c.name)),
     fns: [...STREAM_LIB_FNS, "dyn.builtinStreamClass"],
@@ -1235,6 +1254,8 @@ const RUNTIME_FEATURE_RULES = {
   moduleNamespace: rule({ fns: ["module.namespaceValue"] }),
   /** A module namespace boxed for typed code (scr_module_namespace_dyn.c). */
   moduleNamespaceDyn: rule({ fns: ["module.namespaceDyn"] }),
+  /** Primitive wrapper objects (scr_js_wrapper.c). */
+  primitiveWrapper: rule({ prefixes: ["wrapper."] }),
   /** The WebAssembly API (scr_wasm.c). */
   wasm: rule({ prefixes: ["wasm."] }),
   /** crypto.subtle importKey/sign/verify/digest and CryptoKey:
@@ -1336,8 +1357,11 @@ function noRuntimeFeatures(): RuntimeFeatures {
     searchParams: false,
     urlIdna: false,
     stdioExtended: false,
+    stdioWriteSlot: false,
+    streamWriteErrors: false,
     moduleNamespace: false,
     moduleNamespaceDyn: false,
+    primitiveWrapper: false,
     stream: false,
     streamDyn: false,
     handleProps: false,

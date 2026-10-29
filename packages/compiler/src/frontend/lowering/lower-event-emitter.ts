@@ -2557,6 +2557,43 @@ export function lowerEventsOnce(lowerer: Lowerer, call: ts.CallExpression, loc: 
   const arrayT = arrayOf(DYN);
   const resultT: IrType = { kind: "promise", inner: arrayT };
   let receiver = lowerer.lowerExpr(args[0]!);
+  // events.once(process.stdout, "drain"): the next 'drain' of a stream
+  // whose writes are synchronous never comes (Node emits it only after a
+  // write returned false), so the promise stays pending. A pending promise
+  // holds nothing: the process exits when the loop is empty, as in Node.
+  {
+    let target = args[0]!;
+    while (ts.isParenthesizedExpression(target)) target = target.expression;
+    const stream = ts.isPropertyAccessExpression(target)
+      ? lowerer.stdlibGlobalMember(target, "process")
+      : null;
+    const nameT = lowerer.typeOf(args[1]!);
+    if (
+      (stream === "stdout" || stream === "stderr") &&
+      nameT.isStringLiteralType() &&
+      nameT.value === "drain" &&
+      args.length === 2
+    ) {
+      const pending: IrExpr = {
+        kind: "libCall",
+        fn: "events.pendingForever",
+        args: [],
+        type: resultT,
+        loc,
+      };
+      let name = args[1]!;
+      while (ts.isParenthesizedExpression(name)) name = name.expression;
+      if (ts.isStringLiteralLike(name)) return pending;
+      // A name expression typed "drain" still runs (`pick()`, `(log(), "drain")`).
+      return {
+        kind: "seqExpr",
+        stmts: [{ kind: "exprStmt", expr: lowerer.lowerExpr(args[1]!), loc }],
+        result: pending,
+        type: resultT,
+        loc,
+      };
+    }
+  }
   // A checked-dynamic NodeJS stream slot (dyn-streams.ts): a native stream
   // unboxes by identity; any other value throws the not-supported Error.
   if (

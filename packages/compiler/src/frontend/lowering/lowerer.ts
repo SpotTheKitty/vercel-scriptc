@@ -1,3 +1,4 @@
+import { programCreatesWrappers, routeWrapperConsumers } from "./primitive-wrappers.js";
 import type { DiagnosticCode } from "../../diagnostics/codes.js";
 import { markInferredFactChecks, shapeOverlayFileNames } from "../shape-inference/index.js";
 import { npmStaticPackageOfPath } from "../npm-static.js";
@@ -103,6 +104,8 @@ import { narrowStoredClassValue, narrowGenericClassValue } from "./class-unions.
 import {
   isOptionalProcessStreamProperty,
   isOptionalProcessVersionsRead,
+  programPatchesStdio,
+  type StdioPatchSite,
 } from "./builtins/process.js";
 import { isSettledIteratorValueRead } from "./lower-generators.js";
 import { isRebindableFunctionSymbol } from "./rebindable-functions.js";
@@ -959,6 +962,11 @@ export interface LowerResult {
   dynamicFunctions?: DynamicFunction[];
   /** LowerOptions.tierReport: the report-only tier assignment. */
   tiers?: TierReport;
+  /** The program replaces a process output stream's write method, with the
+   * site: the executable planner refuses the combination with Node islands
+   * (SC8020), whose process objects would not see the patch. Present only
+   * when the build has islands. */
+  stdioPatches?: StdioPatchSite[];
 }
 
 export interface LowerOptions {
@@ -2680,6 +2688,12 @@ export class Lowerer {
   streamPropMutatedSyms: Set<ts.Symbol> | null = null;
   /** Whether some source reads process.exitCode (processReadsExitCode). */
   readsExitCode: boolean | null = null;
+  /** Whether some source replaces a process output stream's write method
+   * (programPatchesStdio in builtins/process.ts). */
+  patchesStdio: boolean | null = null;
+  /** The write-replacement site programPatchesStdio found: the executable
+   * planner refuses it beside Node islands (SC8020). */
+  readonly stdioPatchSites: StdioPatchSite[] = [];
   requestInitPropMutatedSyms: Set<ts.Symbol> | null = null;
   emitterEventTable: Map<string, EventSig> | null = null;
   emitterComputedPatterns: ComputedEventPattern[] = [];
@@ -2735,6 +2749,10 @@ export class Lowerer {
    * prepass. This includes explicit annotations: unchecked TS annotations do
    * not prove that an array property read produced a value. */
   readonly runtimeOptionalBindingTypes = new Map<ts.Symbol, IrType>();
+  /** JavaScript bindings assigned values outside their declared type
+   * (analyzeJsWidenedBindings): checked-dynamic storage, and reads keep the
+   * stored value instead of narrowing it to the checker's type. */
+  readonly jsWidenedBindings = new Set<ts.Symbol>();
   /** A pipeline() function stage's `source` parameter: the IR type of what
    * the pipeline passes it (the previous stage as an async iterable), set
    * while the stage lowers. Parameter typing and `for await` heads read
@@ -3494,6 +3512,9 @@ export class Lowerer {
    * interned here so references under one source-world ABI are the SAME
    * zero-capture closure (see primitiveCtorClosure). */
   readonly primitiveCtorFns = new Map<string, string>();
+  /** Whether a compiled source creates primitive wrapper objects
+   * (programCreatesWrappers), computed on first use. */
+  createsWrappers: boolean | undefined = undefined;
   /** Builtin-module FUNCTIONS admitted as values by their surface-table
    * entries. The resolved runtime function plus ABI is the identity key,
    * so named imports, namespace reads, CommonJS bindings, and alias chains
@@ -4493,6 +4514,7 @@ export class Lowerer {
     // caches made when first needed
     "nanCodedReads",
     "mentionsProcessVersions",
+    "createsWrappers",
     "stringIndexBoundsCache",
     "functionLocalSubclasses",
     "socketEncodingReachable",
@@ -4500,8 +4522,13 @@ export class Lowerer {
     "unixListenReachable",
     "streamPropMutatedSyms",
     "readsExitCode",
+    "patchesStdio",
+    "stdioPatchSites",
     "requestInitPropMutatedSyms",
     "classProtocols",
+    // The whole-program prepass analyzeJsWidenedBindings computes this set
+    // before lowering begins: a pure function of the program's modules.
+    "jsWidenedBindings",
     "cjsSplitRequireBindings",
     "cjsWholeExportSymbols",
     "cjsLiveMemberExports",
@@ -5154,6 +5181,7 @@ export class Lowerer {
       mixinIntersectionInstance: (widened) => mixinIntersectionInstanceType(this, widened),
       classImplementedProtocol: (type) => this.classImplementedProtocol(type),
       isStdlibFile: (sf) => this.isStdlibFile(sf),
+      primitiveWrappers: () => (this.createsWrappers ??= programCreatesWrappers(this)),
       isNpmFile: (sf) => this.isNpmFile(sf),
       isExperimentalFile: (sf) => isExperimentalDeclarationFile(sf, this.experimentalFiles),
       // The declaration-typed boundary's generated types (decl-projection.ts)
@@ -6619,6 +6647,49 @@ export class Lowerer {
           this.runtimeOptionalBindingTypes.set(symbol, widened);
         }
       }
+    }
+  }
+
+  /** A JavaScript `let`/`var` binding assigned a value its declared type
+   * does not admit (`let t = parseInt(s); if (isNaN(t)) t = undefined`):
+   * TypeScript types the binding from its initializer and reports the
+   * assignment (TS2322), which JavaScript files relax, so the binding takes
+   * checked-dynamic storage and holds whatever the program stores. JSDoc
+   * type annotations keep their declared storage. */
+  analyzeJsWidenedBindings(parts: FileParts[]): void {
+    for (const { sf } of parts) {
+      if (!isJsSourceFileName(sf.fileName) || sf.isDeclarationFile) continue;
+      ts.walkPreorder(sf, (node) => {
+        if (
+          !ts.isBinaryExpression(node) ||
+          node.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
+          !ts.isIdentifier(node.left)
+        )
+          return undefined;
+        const symbol = this.resolveValueSymbol(node.left);
+        if (!symbol || this.runtimeOptionalBindingTypes.has(symbol)) return undefined;
+        const decl = symbol.valueDeclaration;
+        if (
+          decl === undefined ||
+          !ts.isVariableDeclaration(decl) ||
+          !ts.isIdentifier(decl.name) ||
+          !isJsSourceFileName(ts.getSourceFileOfNode(decl).fileName) ||
+          hasJsTypeAnnotation(decl) ||
+          decl.parent === undefined ||
+          !ts.isVariableDeclarationList(decl.parent) ||
+          (decl.parent.flags & ts.NodeFlags.Const) !== 0
+        )
+          return undefined;
+        const declared = this.checker.getTypeOfSymbol(symbol);
+        if (declared.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return undefined;
+        const assigned = this.checker.getTypeAtLocation(node.right);
+        if (this.checker.isTypeAssignableTo(assigned, declared)) return undefined;
+        this.runtimeOptionalBindingTypes.set(symbol, DYN);
+        this.jsWidenedBindings.add(symbol);
+        const global = this.globalsBySymbol.get(symbol);
+        if (global) global.type = DYN;
+        return undefined;
+      });
     }
   }
 
@@ -9490,6 +9561,7 @@ export class Lowerer {
       this.analyzeRuntimeOptionalArrayReads(parts);
       this.analyzeDateJsonResults(parts);
       this.analyzeGuardedRecordReadGlobals(parts);
+      this.analyzeJsWidenedBindings(parts);
     });
     // Decorated classes analyze AFTER the whole collection pass: a
     // decorator's return type may name a subclass declared below the
@@ -9644,9 +9716,9 @@ export class Lowerer {
     // array-HOF loop functions, which ride the same list), and the
     // implicit-any instances lowered eagerly at their first call sites.
     this.settleSharedHelperLocations([...functions, ...this.liftedFns, ...this.implicitFns]);
-    functions.push(...this.liftedFns);
-    functions.push(...this.implicitFns);
-    functions.push(...runtimeClassConstructs(this, functions));
+    for (const fn of this.liftedFns) functions.push(fn);
+    for (const fn of this.implicitFns) functions.push(fn);
+    for (const fn of runtimeClassConstructs(this, functions)) functions.push(fn);
 
     if (this.remainder) {
       // Deferred collection diagnostics nothing flushed — declarations no
@@ -9676,6 +9748,7 @@ export class Lowerer {
     if (this.diags.length === 0) fuseArrayPipelines(this, functions);
     finalizeClassMethodValues(this, functions);
     finalizePrivateBrands(this, functions);
+    routeWrapperConsumers(this, functions);
     trackClassFieldCreation(this, functions);
     boxClassInstancesExactly(this, functions);
     addUntypedIntegrityWords(this);
@@ -9829,11 +9902,20 @@ export class Lowerer {
     // rewrite keeps every dynamic operation dynamic (each dyn operator
     // becomes its js twin), so coverage's dynamic statements are unchanged.
     if (module && this.dynamicFunctions.length > 0) promoteJsvals(module);
+    // A program that replaces a process output stream's write method beside
+    // Node islands is refused by the executable planner (SC8020): an
+    // island's process.stdout is its own object. Only island builds pay for
+    // the whole-program scan.
+    const stdioPatches =
+      this.nodeIslands !== null && programPatchesStdio(this)
+        ? [...this.stdioPatchSites]
+        : undefined;
     return {
       module,
       diagnostics: this.diags,
       runtimeFences: this.runtimeFences,
       stats: this.stats,
+      ...(stdioPatches !== undefined && stdioPatches.length > 0 ? { stdioPatches } : {}),
       ...(this.dynamicFunctions.length > 0 ? { dynamicFunctions: this.dynamicFunctions } : {}),
       ...(this.statsByFile.size > 0 ? { statsByFile: this.statsByFile } : {}),
       ...(this.provenanceElided.length > 0 ? { provenanceElided: this.provenanceElided } : {}),
@@ -9933,9 +10015,11 @@ export class Lowerer {
   private reportBlockedBody(decl: ts.FunctionDeclaration): void {
     const diags = blockedBodyDiagnostics(this, decl);
     const symbol = declSymbolOf(this, decl);
-    if (symbol && this.alreadyFlushed.has(symbol))
-      this.reachedBlockedBodyDiagnostics.push(...diags);
-    else for (const d of diags) this.pushDiag(d);
+    if (symbol && this.alreadyFlushed.has(symbol)) {
+      for (const d of diags) this.reachedBlockedBodyDiagnostics.push(d);
+    } else {
+      for (const d of diags) this.pushDiag(d);
+    }
   }
 
   /** Whether run() counts a signature-blocked declaration in
@@ -10011,6 +10095,7 @@ export class Lowerer {
       this.analyzeRuntimeOptionalArrayReads(parts);
       this.analyzeDateJsonResults(parts);
       this.analyzeGuardedRecordReadGlobals(parts);
+      this.analyzeJsWidenedBindings(parts);
     });
     // Decorated classes analyze post-collection here too: the %init seeds
     // lower the decoration calls, whose edges (decorator bodies, construct
@@ -10647,7 +10732,7 @@ export class Lowerer {
       ...byName(this.liftedFns),
       ...byName(this.implicitFns),
     ];
-    functions.push(...runtimeClassConstructs(this, functions));
+    for (const fn of runtimeClassConstructs(this, functions)) functions.push(fn);
     if (this.regexGroupResults) for (const fn of functions) foldRegexSpanReads(this, fn);
     // The worklist can leave a virtual site with a single implementation.
     // Devirtualize after construction/override reachability has settled.
@@ -10936,10 +11021,10 @@ export class Lowerer {
     }
     const captured = this.diags.splice(diagsBefore);
     if (captured.some((d) => d.code === "SC9001")) {
-      this.diags.push(...captured);
+      for (const d of captured) this.diags.push(d);
       return null;
     }
-    this.runtimeFences.push(...captured);
+    for (const d of captured) this.runtimeFences.push(d);
 
     const fence = this.runtimeFenceStmt(captured[0], node, target.fallback, target.bareMessage);
     const loc = locOf(node);
@@ -11228,7 +11313,7 @@ export class Lowerer {
       .slice(diagsBefore)
       .filter((d) => d.rejects !== undefined || this.loweredOnceDiags.has(d));
     this.diags.length = diagsBefore;
-    this.diags.push(...kept);
+    for (const d of kept) this.diags.push(d);
   }
 
   /** A unit that still fails after its retries commits its first
@@ -11241,7 +11326,8 @@ export class Lowerer {
       d.rejects !== undefined || this.loweredOnceDiags.has(d);
     const kept = this.diags.slice(diagsBefore).filter(carried);
     this.diags.length = diagsBefore;
-    this.diags.push(...first.filter((d) => !carried(d)), ...kept);
+    for (const d of first) if (!carried(d)) this.diags.push(d);
+    for (const d of kept) this.diags.push(d);
   }
 
   /** Lowers one unit whose body-level poison skips it (a generic
@@ -14145,6 +14231,19 @@ export class Lowerer {
     );
   }
 
+  /** Whether `node`'s TS type is a `Promise<never>` (the throw-only async
+   * function's declared result): the promise can never settle, so the value
+   * it would resolve to is unreachable. The IR keeps `Promise<never>` as a
+   * promise with a void payload, exactly like `Promise<void>`, so the TS
+   * payload type is what separates the two. */
+  private promisePayloadIsNever(node: ts.Expression): boolean {
+    const t = this.typeOf(node);
+    if ((t.flags & ts.TypeFlags.Object) === 0) return false;
+    if (((t as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) === 0) return false;
+    const args = this.checker.getTypeArguments(t as ts.TypeReference);
+    return args.length === 1 && (args[0]!.flags & ts.TypeFlags.Never) !== 0;
+  }
+
   /** The value of `return <e>` (already lowered untyped) in an async or
    * void context: a promise flattens through the returned-promise await,
    * everything else converts into the declared result. */
@@ -14152,6 +14251,15 @@ export class Lowerer {
     if (expected.kind === "void" && e.kind === "unitLit") return null;
     if (this.ctx.isAsync && e.type.kind === "promise" && expected.kind !== "promise") {
       const awaited = this.returnedPromiseAwait(e);
+      // A `Promise<never>` never settles, so the awaited value is
+      // unreachable: it fills any result shape instead of failing the
+      // void-to-record conversion.
+      if (
+        expected.kind !== "void" &&
+        e.type.inner.kind === "void" &&
+        this.promisePayloadIsNever(node)
+      )
+        return this.divergentValue(awaited, expected);
       return this.coerceInto(node, awaited, expected);
     }
     return this.coerceInto(node, e, expected);

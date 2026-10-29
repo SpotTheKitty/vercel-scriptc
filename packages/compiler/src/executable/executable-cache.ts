@@ -65,9 +65,14 @@ export interface EarlyExecutableNativeFeatures {
   wasm?: boolean;
   warningReplace?: boolean;
   stdioExtended?: boolean;
+  /** Error-taking write completion callbacks: SCR_STREAM_WRITE_ERRORS. */
+  streamWriteErrors?: boolean;
+  /** The process output write slot: SCR_STDIO_WRITE_SLOT. */
+  stdioWriteSlot?: boolean;
   nodeIsland?: boolean;
   moduleNamespace?: boolean;
   moduleNamespaceDyn?: boolean;
+  primitiveWrapper?: boolean;
   zlib: boolean;
   brotli?: boolean;
   assert: boolean;

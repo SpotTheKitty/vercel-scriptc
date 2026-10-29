@@ -172,6 +172,12 @@ export interface CcOptions {
   warningReplace?: boolean;
   /** SCR_STDIO_EXTENDED: stdin encoding, string data listeners, resize. */
   stdioExtended?: boolean;
+  /** SCR_STREAM_WRITE_ERRORS: the stream unit publishes the error each
+   * write completion callback receives (error-taking write callbacks). */
+  streamWriteErrors?: boolean;
+  /** SCR_STDIO_WRITE_SLOT: the events unit carries the typed write slot
+   * (the write method as a value, its replacement, run-time-typed chunks). */
+  stdioWriteSlot?: boolean;
   /** Calls into Node.js (@scriptc/node): compiles scr_node_island.c and
    * the event loop with SCR_NODE_ISLANDS (its helper slot). */
   nodeIsland?: boolean;
@@ -181,6 +187,8 @@ export interface CcOptions {
   /** A module namespace boxed for typed code: compiles
    * scr_module_namespace_dyn.c. */
   moduleNamespaceDyn?: boolean;
+  /** Primitive wrapper objects: compiles scr_js_wrapper.c. */
+  primitiveWrapper?: boolean;
   /** The program uses the process-events surface (signal/exit listeners,
    * stdin events, for-await over stdin — moduleUsesProcessEvents on the
    * IR): compiles scr_events.c into the binary. Event-free binaries keep

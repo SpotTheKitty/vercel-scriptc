@@ -1,4 +1,5 @@
 /* Binary operators: arithmetic, comparisons and equality, logical and nullish pairs, and string conversion for concatenation. */
+import { lowerStaticPrivateAssignment } from "../private-statics.js";
 import { keyedHelperName } from "../stable-names.js";
 import * as ts from "../../ts7/adapter.js";
 import {
@@ -632,7 +633,11 @@ export function lowerNativeFunctionAssignment(
   const classType = storedClassValueType(lowerer, target.expression);
   const staticClass =
     classType?.kind === "classval" ? lowerer.classes.get(classType.className) : undefined;
-  if (staticClass && hasRuntimeStatics(staticClass)) {
+  if (
+    staticClass &&
+    hasRuntimeStatics(staticClass) &&
+    !(ts.isPropertyAccessExpression(target) && ts.isPrivateIdentifier(target.name))
+  ) {
     return lowerDynMemberAssignment(
       lowerer,
       expr,
@@ -1110,6 +1115,8 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     if (op === ts.SyntaxKind.EqualsToken) {
       const prototypeWrite = lowerClassPrototypeComputedAssignment(lowerer, expr);
       if (prototypeWrite) return prototypeWrite;
+      const staticPrivateWrite = lowerStaticPrivateAssignment(lowerer, expr);
+      if (staticPrivateWrite) return staticPrivateWrite;
       const callableWrite = lowerNativeFunctionAssignment(lowerer, expr);
       if (callableWrite) return callableWrite;
       const dereferenced = lowerDereferencedElementAssignment(lowerer, expr);
@@ -3013,6 +3020,44 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
         type: DYN,
         loc,
       };
+    }
+    // `u || d` whose checker result is one of u's own arms while u keeps
+    // arms flow narrowing ruled out (`typeof o === "string" ? ... : o ||
+    // {}` leaves the string arm in the stored union). Test u in its own
+    // union and extract the result arm through the checked narrowing: a
+    // value of a ruled-out arm traps rather than masquerading as the
+    // result type.
+    if (op === ts.SyntaxKind.BarBarToken && left.type.kind === "union") {
+      const def = lowerer.unions.get(left.type.unionId);
+      if (
+        target !== null &&
+        def !== undefined &&
+        def.arms.some(isUnitType) &&
+        lowerer.armTag(left.type.unionId, target) >= 0
+      ) {
+        const helper = lowerer.narrowedArmHelper(left.type.unionId, target, loc);
+        if (helper) {
+          lowerer.requireTruthyUnion(left.type.unionId, expr);
+          const stmts: IrStmt[] = [];
+          let stable: IrExpr = left;
+          if (!isSafeToRepeat(left)) {
+            const local = lowerer.declareHiddenLocal("%or", left.type);
+            stmts.push({ kind: "varDecl", localId: local.id, init: left, loc });
+            stable = varRef(local.id, left.type, loc);
+          }
+          const result: IrExpr = {
+            kind: "ternary",
+            cond: lowerer.ensureBool(stable, expr.left),
+            then: { kind: "call", callee: helper, args: [stable], type: target, loc },
+            else_: lowerer.lowerExprExpecting(expr.right, target),
+            type: target,
+            loc,
+          };
+          return stmts.length === 0
+            ? result
+            : { kind: "seqExpr", stmts, result, type: target, loc };
+        }
+      }
     }
     lowerer.unsupported(
       "SC1090",

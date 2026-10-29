@@ -1765,6 +1765,18 @@ declare module "tty" {
     /* The bytes queued behind the last write: the compiled binary's fd
      * 1/2 writes are synchronous, so it is always 0. */
     readonly writableLength: number;
+    /* Node's default for the process streams (65536 for a pipe, a file and a
+     * TTY): a constant, because nothing is ever queued. */
+    readonly writableHighWaterMark: number;
+    /* Always false: a synchronous write never returns false, so no 'drain'
+     * is ever pending. */
+    readonly writableNeedDrain: boolean;
+    /* 'drain' and the other events by name. Node returns the stream. */
+    on(event: string, listener: (...args: any[]) => void): this;
+    once(event: string, listener: (...args: any[]) => void): this;
+    addListener(event: string, listener: (...args: any[]) => void): this;
+    off(event: string, listener: (...args: any[]) => void): this;
+    removeListener(event: string, listener: (...args: any[]) => void): this;
     getWindowSize(): [number, number];
   }
   export function isatty(fd: number): boolean;

@@ -3725,6 +3725,33 @@ function buildLibFnSignatures() {
      * names, the compiled getter, and the Symbol.toStringTag key. Draws
      * Node's frozen null-prototype object, one per module. Never throws. */
     "module.namespaceDyn": { argTypes: [STRING, arrayOf(STRING), DYN, DYN], result: DYN },
+    /** A primitive wrapper object (scr_js_wrapper_new): the kind
+     * (0 String, 1 Number, 2 Boolean), the value it converts, and the three
+     * constructor values for the prototypes' `constructor`. */
+    "wrapper.new": { argTypes: [F64, DYN, DYN, DYN, DYN], result: DYN },
+    /** ToObject (scr_js_wrapper_to_object): a wrapper for a primitive, the
+     * value for an object, a fresh object for null/undefined; then the
+     * three constructor values. */
+    "wrapper.toObject": { argTypes: [DYN, DYN, DYN, DYN], result: DYN },
+    /** `value instanceof String/Number/Boolean` (scr_js_wrapper_instance_of):
+     * the kind's prototype on the value's chain. */
+    "wrapper.instanceOf": { argTypes: [DYN, F64], result: BOOL },
+    /** Object.prototype.toString with the [[PrimitiveValue]] brands
+     * (scr_js_wrapper_object_tag); dyn.objectTag otherwise. */
+    "wrapper.objectTag": { argTypes: [DYN], result: STRING },
+    /** util.types brands that read the slot (scr_js_wrapper_type_is). */
+    "wrapper.typeIs": { argTypes: [DYN, STRING], result: BOOL },
+    /** The value unchanged, or the not-supported Error when its own data
+     * graph holds a wrapper (scr_js_wrapper_guard; the string names the
+     * consumer). guardList checks each element. */
+    "wrapper.guard": { argTypes: [DYN, STRING], result: DYN },
+    "wrapper.guardList": { argTypes: [arrayOf(DYN), STRING], result: arrayOf(DYN) },
+    /** Whether a member value a call read as `name` is the builtin
+     * String.prototype method of that name (scr_js_wrapper_is_string_method),
+     * and the method's receiver, ToString of the value
+     * (scr_js_wrapper_this_string). */
+    "wrapper.isStringMethod": { argTypes: [DYN, STRING], result: BOOL },
+    "wrapper.thisString": { argTypes: [DYN, STRING], result: DYN },
     "fs.callbackValue": { argTypes: [STRING], result: DYN },
     "fs.callbackCall": { argTypes: [STRING, DYN], result: DYN },
     "process.hrtimeValue": { argTypes: [], result: DYN },
@@ -3750,6 +3777,14 @@ function buildLibFnSignatures() {
      * never throws. */
     "process.stdoutWrite": { argTypes: [STRING], result: BOOL },
     "process.stdio": { argTypes: [F64], result: DYN },
+    /** The same stream object, reached by the typed write-slot lowering
+     * (the write method as a value, its replacement, a patched program's
+     * typed writes): identical at run time, and the link switch for the
+     * SCR_STDIO_WRITE_SLOT build of the events unit. */
+    "process.stdioSlot": { argTypes: [F64], result: DYN },
+    /** process.stdout/stderr.write(chunk) with a run-time chunk: Node's
+     * Writable validation, then a synchronous write. */
+    "process.stdioWriteDyn": { argTypes: [F64, DYN], result: BOOL },
     "process.stderrWrite": { argTypes: [STRING], result: BOOL },
     // error.new's result and the receiver slots are builtin-error classes —
     // program-dependent object types, checked in the libCall case.
@@ -4665,6 +4700,10 @@ function buildLibFnSignatures() {
     "writable.writeU": { argTypes: [null, null], result: BOOL },
     "writable.writeDyn": { argTypes: [null, DYN], result: BOOL },
     "writable.writeEnc": { argTypes: [null, F64, DYN], result: BOOL },
+    /** The error-first write form: (recv, mode, chunk, encoding, cb) where
+     * mode 0 is a bytes chunk, 1 a string, 2 a run-time chunk, and the
+     * callback takes the completion's error (Node's null on success). */
+    "writable.writeEcb": { argTypes: [null, F64, null, DYN, null], result: BOOL },
     "writable.end": { argTypes: [null, F64], result: VOID },
     "writable.cork": { argTypes: [null], result: VOID },
     "writable.uncork": { argTypes: [null], result: VOID },
@@ -5427,6 +5466,10 @@ function buildLibFnSignatures() {
      * undefined; tty.isatty exposes the boolean result directly. */
     "process.isTTY": { argTypes: [F64], result: BOOL },
     "process.isTTYValue": { argTypes: [DYN], result: BOOL },
+    /** A promise that never settles (events.once of an event that cannot
+     * occur, e.g. 'drain' on a synchronous process stream). The result is
+     * events.once's own Promise<any[]> type. */
+    "events.pendingForever": { argTypes: [], result: { kind: "promise", inner: arrayOf(DYN) } },
     // Like process.envGet: the result is the module's interned
     // `number | undefined` union — checked by arms in the libCall case.
     /** Terminal width over an fd literal (1/2 — process.stdout/stderr
