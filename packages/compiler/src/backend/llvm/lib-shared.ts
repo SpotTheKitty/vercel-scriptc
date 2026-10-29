@@ -391,9 +391,14 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "process.envPairs": "scr_env_pairs",
   "process.stdoutWrite": "scr_process_stdout_write",
   "process.stdio": "scr_process_stdio",
+  "process.stdioSlot": "scr_process_stdio",
+  "process.stdioWriteDyn": "scr_process_stdio_write_dyn",
   "process.stderrWrite": "scr_process_stderr_write",
   "process.isTTY": "scr_process_is_tty",
   "process.isTTYValue": "scr_process_is_tty_value",
+  // A promise that never settles (events.once of an event a synchronous
+  // stream never emits); a fresh pending promise is its owned result.
+  "events.pendingForever": "scr_promise_new",
   "date.now": "scr_date_now",
   "date.newNow": "scr_date_now",
   "date.newMs": "scr_date_new_ms",
@@ -1914,6 +1919,11 @@ export const USES_TIMERS_LIB_FNS = new Set<string>([
   "worker.receiveMessageOnPort",
   "worker.broadcastChannel",
   "process.stdio",
+  // The typed write slot and the run-time-typed chunk write keep the loop
+  // live for the write callbacks they queue: both reach the same stream
+  // object as process.stdio and call back from a nextTick.
+  "process.stdioSlot",
+  "process.stdioWriteDyn",
   "fetch.start",
   "fetch.input",
   "fetch.function",
@@ -1999,6 +2009,7 @@ export const USES_TIMERS_LIB_FNS = new Set<string>([
   "writable.writeU",
   "writable.writeDyn",
   "writable.writeEnc",
+  "writable.writeEcb",
   "writable.end",
   "writable.uncork",
   "stream.destroy",

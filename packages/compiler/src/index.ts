@@ -707,6 +707,8 @@ async function compileExecutableNative(
     ...(features.wasm ? { wasm: true } : {}),
     ...(features.warningReplace ? { warningReplace: true } : {}),
     ...(features.stdioExtended ? { stdioExtended: true } : {}),
+    ...(features.streamWriteErrors ? { streamWriteErrors: true } : {}),
+    ...(features.stdioWriteSlot ? { stdioWriteSlot: true } : {}),
     ...(features.nodeIsland ? { nodeIsland: true } : {}),
     ...(features.moduleNamespace ? { moduleNamespace: true } : {}),
     ...(features.moduleNamespaceDyn ? { moduleNamespaceDyn: true } : {}),

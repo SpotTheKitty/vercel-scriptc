@@ -161,6 +161,12 @@ export interface CcOptions {
   warningReplace?: boolean;
   /** SCR_STDIO_EXTENDED: stdin encoding, string data listeners, resize. */
   stdioExtended?: boolean;
+  /** SCR_STREAM_WRITE_ERRORS: the stream unit publishes the error each
+   * write completion callback receives (error-taking write callbacks). */
+  streamWriteErrors?: boolean;
+  /** SCR_STDIO_WRITE_SLOT: the events unit carries the typed write slot
+   * (the write method as a value, its replacement, run-time-typed chunks). */
+  stdioWriteSlot?: boolean;
   /** Calls into Node.js (@scriptc/node): compiles scr_node_island.c and
    * the event loop with SCR_NODE_ISLANDS (its helper slot). */
   nodeIsland?: boolean;

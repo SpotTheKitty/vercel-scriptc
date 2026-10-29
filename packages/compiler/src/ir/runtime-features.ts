@@ -647,6 +647,8 @@ const PROCESS_EVENT_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "process.onExit",
   "process.onSignal",
   "process.stdio",
+  "process.stdioSlot",
+  "process.stdioWriteDyn",
   "stdin.nextChunk",
   "stdin.onData",
   "stdin.onEnd",
@@ -1208,6 +1210,18 @@ const RUNTIME_FEATURE_RULES = {
       (node.kind === "dynInvoke" && STDIO_EXTENDED_NAMES.has(node.method)) ||
       (node.kind === "strLit" && STDIO_EXTENDED_NAMES.has(node.value)),
   }),
+  /** A write completion callback that takes the error argument lowers
+   * through writable.writeEcb: the SCR_STREAM_WRITE_ERRORS stream unit
+   * publishes the error the adapter delivers. */
+  streamWriteErrors: rule({ fns: ["writable.writeEcb"] }),
+  /** The program reaches the process output streams' write slot — the
+   * write method as a value (process.stdioSlot), its replacement, a patched
+   * program's typed writes, or a run-time-typed chunk
+   * (process.stdioWriteDyn): the SCR_STDIO_WRITE_SLOT build of the events
+   * unit carries the shared write body, the dynamic-chunk entry point and
+   * Node's anonymous write function. Every other program links the default
+   * object, byte for byte. */
+  stdioWriteSlot: rule({ fns: ["process.stdioSlot", "process.stdioWriteDyn"] }),
   stream: rule({
     initial: (mod) => (mod.classes ?? []).some((c) => RUNTIME_STREAM_CLASSES.has(c.name)),
     fns: [...STREAM_LIB_FNS, "dyn.builtinStreamClass"],
@@ -1336,6 +1350,8 @@ function noRuntimeFeatures(): RuntimeFeatures {
     searchParams: false,
     urlIdna: false,
     stdioExtended: false,
+    stdioWriteSlot: false,
+    streamWriteErrors: false,
     moduleNamespace: false,
     moduleNamespaceDyn: false,
     primitiveWrapper: false,

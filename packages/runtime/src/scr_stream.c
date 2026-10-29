@@ -2200,6 +2200,59 @@ static void scr_stream_do_write_inner(ScrStream *s, ScrBytes *chunk /*moves*/, S
   st->w.wsync = false;
 }
 
+#ifdef SCR_STREAM_WRITE_ERRORS
+/* The error the next user write callback receives (borrowed; NULL is
+ * success, Node's null). Set immediately around each user write-callback
+ * call below; read by the error-first wrapper scr_stream_ecb_fire. */
+static SCR_TL ScrError *scr_stream_cb_error = NULL;
+#define SCR_WCB_CALL(cb, err)                                  \
+  do {                                                         \
+    ScrError *scr_wcb_saved = scr_stream_cb_error;             \
+    scr_stream_cb_error = (err);                               \
+    ((void (*)(ScrClosure *))(cb)->fn)(cb);                    \
+    scr_stream_cb_error = scr_wcb_saved;                       \
+  } while (0)
+/* The errorBuffer/destroyed-afterWrite form: the stream's own error, or
+ * the fresh ERR_STREAM_DESTROYED Node passes (owned around the call). */
+#define SCR_WCB_CALL_ERROF(cb, st)                                              \
+  do {                                                                          \
+    ScrError *scr_wcb_err = (st)->errored                                       \
+        ? scr_error_retain((st)->errored)                                       \
+        : scr_stream_mkerr("ERR_STREAM_DESTROYED",                              \
+                           "Cannot call write after a stream was destroyed");   \
+    SCR_WCB_CALL(cb, scr_wcb_err);                                              \
+    scr_error_release(scr_wcb_err);                                             \
+  } while (0)
+
+/* An error-first user callback behind the zero-argument write-callback ABI:
+ * caps[0] holds the user's closure, caps[1] the compiler-built adapter
+ * (ScrFsRenameFn: (cb, err-or-NULL) — NULL is Node's null). */
+static void *scr_stream_ecb_retain(void *p) { return p; }
+static void scr_stream_ecb_release(void *p) { (void)p; }
+static void scr_stream_ecb_trace(void *p, ScrTraceVisit visit, void *ctx) {
+  (void)p;
+  (void)visit;
+  (void)ctx;
+}
+static void scr_stream_ecb_fire(ScrClosure *wrapper) {
+  ScrClosure *user = (ScrClosure *)scr_box_get_ref(wrapper->caps[0]);
+  ScrFsRenameFn fn = (ScrFsRenameFn)scr_box_get_ref(wrapper->caps[1]);
+  fn(user, scr_stream_cb_error);
+  scr_closure_release(user); /* scr_box_get_ref returned +1 */
+}
+ScrClosure *scr_stream_ecb_wrap(ScrClosure *cb /*moves*/, ScrFsRenameFn fn) {
+  ScrClosure *w = scr_closure_new((void *)scr_stream_ecb_fire, 2);
+  w->caps[0] = scr_box_new_obj(scr_closure_retain_v, scr_closure_release_v, scr_closure_trace_v);
+  scr_box_set_ref(w->caps[0], cb);
+  w->caps[1] = scr_box_new_obj(scr_stream_ecb_retain, scr_stream_ecb_release, scr_stream_ecb_trace);
+  scr_box_set_ref(w->caps[1], (void *)fn);
+  return w;
+}
+#else
+#define SCR_WCB_CALL(cb, err) ((void (*)(ScrClosure *))(cb)->fn)(cb)
+#define SCR_WCB_CALL_ERROF(cb, st) SCR_WCB_CALL(cb, NULL)
+#endif
+
 /* errorBuffer: once destroyed, the buffered writes' callbacks and the
  * end(cb) callbacks run (Node passes them ERR_STREAM_DESTROYED or the
  * stream's error) — unless a write is in flight, whose completion runs
@@ -2213,7 +2266,7 @@ static void scr_stream_error_buffer(ScrStream *s) {
     scr_stream_wchunk_release(st, e.chunk);
     if (e.enc) scr_dyn_release(e.enc);
     if (e.cb) {
-      ((void (*)(ScrClosure *))e.cb->fn)(e.cb);
+      SCR_WCB_CALL_ERROF(e.cb, st);
       scr_closure_release(e.cb);
     }
   }
@@ -2256,7 +2309,7 @@ static void scr_stream_after_write(ScrStream *s, ScrClosure *cb, size_t count) {
   if (cb) {
     /* afterWrite: the callback once per write the tick completes */
     for (size_t i = 0; i < count; i++) {
-      ((void (*)(ScrClosure *))cb->fn)(cb);
+      SCR_WCB_CALL(cb, NULL);
       if (scr_exc_pending()) break;
     }
     scr_closure_release(cb);
@@ -7169,7 +7222,13 @@ static bool scr_stream_write_chunk_enc(ScrStream *s, ScrBytes *chunk /*borrowed*
     ScrError *e = st->has_w && !st->destroyed
         ? scr_stream_mkerr("ERR_STREAM_WRITE_AFTER_END", "write after end")
         : scr_stream_mkerr("ERR_STREAM_DESTROYED", "Cannot call write after a stream was destroyed");
-    if (cb) scr_st_tick(s, SCR_ST_WCB_ERR, NULL, cb);
+    if (cb) {
+#ifdef SCR_STREAM_WRITE_ERRORS
+      scr_st_tick(s, SCR_ST_WCB_ERR, scr_error_retain(e), cb);
+#else
+      scr_st_tick(s, SCR_ST_WCB_ERR, NULL, cb);
+#endif
+    }
     scr_stream_error_or_destroy(s, e);
     scr_error_release(e);
     return false;
@@ -7421,7 +7480,7 @@ void scr_stream_write_done(ScrStream *s, ScrError *err /*moves*/) {
       return;
     }
     if (ucb) {
-      ((void (*)(ScrClosure *))ucb->fn)(ucb);
+      SCR_WCB_CALL(ucb, err);
       scr_closure_release(ucb);
     }
     if (!scr_exc_pending()) scr_stream_error_or_destroy(s, err);
@@ -8010,8 +8069,12 @@ static void scr_stream_run_tick(ScrStreamTick *t) {
         scr_stream_after_write(s, cb, t->count);
       } else {
         if (cb) {
+          /* Node v24 afterWrite runs `cb(null)` even for a destroyed
+           * stream (the destroy that landed after this tick was queued
+           * does not poison the completions it already owns), then
+           * errorBuffer. */
           for (size_t i = 0; i < t->count; i++) {
-            ((void (*)(ScrClosure *))cb->fn)(cb);
+            SCR_WCB_CALL(cb, NULL);
             if (scr_exc_pending()) break;
           }
           scr_closure_release(cb);
@@ -8105,7 +8168,7 @@ static void scr_stream_run_tick(ScrStreamTick *t) {
       ScrClosure *cb = t->cb;
       t->cb = NULL;
       if (cb) {
-        ((void (*)(ScrClosure *))cb->fn)(cb);
+        SCR_WCB_CALL(cb, t->err);
         scr_closure_release(cb);
       }
       break;
@@ -8114,7 +8177,7 @@ static void scr_stream_run_tick(ScrStreamTick *t) {
       ScrClosure *cb = t->cb;
       t->cb = NULL;
       if (cb) {
-        ((void (*)(ScrClosure *))cb->fn)(cb);
+        SCR_WCB_CALL(cb, t->err);
         scr_closure_release(cb);
       }
       if (!scr_exc_pending()) scr_stream_error_or_destroy(s, t->err);

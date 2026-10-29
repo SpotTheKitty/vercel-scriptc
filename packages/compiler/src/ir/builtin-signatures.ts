@@ -3763,6 +3763,14 @@ function buildLibFnSignatures() {
      * never throws. */
     "process.stdoutWrite": { argTypes: [STRING], result: BOOL },
     "process.stdio": { argTypes: [F64], result: DYN },
+    /** The same stream object, reached by the typed write-slot lowering
+     * (the write method as a value, its replacement, a patched program's
+     * typed writes): identical at run time, and the link switch for the
+     * SCR_STDIO_WRITE_SLOT build of the events unit. */
+    "process.stdioSlot": { argTypes: [F64], result: DYN },
+    /** process.stdout/stderr.write(chunk) with a run-time chunk: Node's
+     * Writable validation, then a synchronous write. */
+    "process.stdioWriteDyn": { argTypes: [F64, DYN], result: BOOL },
     "process.stderrWrite": { argTypes: [STRING], result: BOOL },
     // error.new's result and the receiver slots are builtin-error classes —
     // program-dependent object types, checked in the libCall case.
@@ -4671,6 +4679,10 @@ function buildLibFnSignatures() {
     "writable.writeU": { argTypes: [null, null], result: BOOL },
     "writable.writeDyn": { argTypes: [null, DYN], result: BOOL },
     "writable.writeEnc": { argTypes: [null, F64, DYN], result: BOOL },
+    /** The error-first write form: (recv, mode, chunk, encoding, cb) where
+     * mode 0 is a bytes chunk, 1 a string, 2 a run-time chunk, and the
+     * callback takes the completion's error (Node's null on success). */
+    "writable.writeEcb": { argTypes: [null, F64, null, DYN, null], result: BOOL },
     "writable.end": { argTypes: [null, F64], result: VOID },
     "writable.cork": { argTypes: [null], result: VOID },
     "writable.uncork": { argTypes: [null], result: VOID },
@@ -5433,6 +5445,10 @@ function buildLibFnSignatures() {
      * undefined; tty.isatty exposes the boolean result directly. */
     "process.isTTY": { argTypes: [F64], result: BOOL },
     "process.isTTYValue": { argTypes: [DYN], result: BOOL },
+    /** A promise that never settles (events.once of an event that cannot
+     * occur, e.g. 'drain' on a synchronous process stream). The result is
+     * events.once's own Promise<any[]> type. */
+    "events.pendingForever": { argTypes: [], result: { kind: "promise", inner: arrayOf(DYN) } },
     // Like process.envGet: the result is the module's interned
     // `number | undefined` union — checked by arms in the libCall case.
     /** Terminal width over an fd literal (1/2 — process.stdout/stderr

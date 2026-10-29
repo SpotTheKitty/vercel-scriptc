@@ -351,6 +351,29 @@ export function variantsFor(source) {
       when: { stdioExtended: true, nodeIsland: true },
       defines: ["SCR_STDIO_EXTENDED", "SCR_NODE_ISLANDS"],
     });
+    // The typed process output write slot (the write method as a value, its
+    // replacement, run-time-typed chunks): the shared write body, the
+    // dynamic-chunk entry point and Node's anonymous write function. Every
+    // other program keeps the default object, byte for byte.
+    for (const [id, when, defines] of [
+      ["stdio-write-slot", { stdioWriteSlot: true }, ["SCR_STDIO_WRITE_SLOT"]],
+      [
+        "stdio-extended-write-slot",
+        { stdioExtended: true, stdioWriteSlot: true },
+        ["SCR_STDIO_EXTENDED", "SCR_STDIO_WRITE_SLOT"],
+      ],
+      [
+        "node-island-write-slot",
+        { nodeIsland: true, stdioWriteSlot: true },
+        ["SCR_NODE_ISLANDS", "SCR_STDIO_WRITE_SLOT"],
+      ],
+      [
+        "stdio-extended-node-island-write-slot",
+        { stdioExtended: true, nodeIsland: true, stdioWriteSlot: true },
+        ["SCR_STDIO_EXTENDED", "SCR_NODE_ISLANDS", "SCR_STDIO_WRITE_SLOT"],
+      ],
+    ])
+      variants.push({ id, when, defines });
   }
   // Programs with Node islands link the event loop with the Node island slot;
   // every other program keeps the default object, byte for byte.
@@ -359,6 +382,16 @@ export function variantsFor(source) {
       id: "node-island",
       when: { nodeIsland: true },
       defines: ["SCR_NODE_ISLANDS"],
+    });
+  }
+  // Error-taking write completion callbacks: the stream unit publishes the
+  // error each callback receives; every other program keeps the default
+  // object, byte for byte.
+  if (source === "scr_stream.c") {
+    variants.push({
+      id: "write-errors",
+      when: { streamWriteErrors: true },
+      defines: ["SCR_STREAM_WRITE_ERRORS"],
     });
   }
   if (source === "scr_cycle.c") {
