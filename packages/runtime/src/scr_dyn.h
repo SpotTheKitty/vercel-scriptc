@@ -207,6 +207,7 @@ typedef enum {
   X(NET_SERVER, 3) /* ScrNetServer — net.Server (http.Server rides the same handle) */ \
   X(NET_SOCKET, 2) /* ScrNetSocket — net.Socket */ \
   X(NET_SOCKET_ADDRESS, 47) /* net.SocketAddress (scr_net.c) */ \
+  X(NODE_ISLAND, 84) /* a Node island value (scr_node_island_handle.c) */ \
   X(PRIVATE_KEY, 65) /* node:crypto PrivateKeyObject (scr_pki.c) */ \
   X(PUBLIC_KEY, 66) /* node:crypto PublicKeyObject (scr_pki.c) */ \
   X(REGEXP, 26) /* native RegExp, shared compiled pattern */ \
@@ -236,25 +237,24 @@ typedef enum {
   X(WEB_TRANSFORM, 73) /* native identity TransformStream (scr_fetch.c) */ \
   X(WEB_WRITABLE, 74) /* a TransformStream's WritableStream (scr_fetch.c) */ \
   X(WEB_WRITER, 75) /* WritableStreamDefaultWriter (scr_fetch.c) */ \
-  X(WORKER, 35)
+  X(WORKER, 35) \
+  X(WS_BYTE_STRATEGY, 85) /* ByteLengthQueuingStrategy (scr_webstreams.c) */ \
+  X(WS_COUNT_STRATEGY, 86) /* CountQueuingStrategy (scr_webstreams.c) */ \
+  X(WS_RCONTROLLER, 87) /* ReadableStreamDefaultController (scr_webstreams.c) */ \
+  X(WS_READABLE, 88) /* ReadableStream for checked-dynamic code (scr_webstreams.c) */ \
+  X(WS_READER, 89) /* ReadableStreamDefaultReader (scr_webstreams.c) */ \
+  X(WS_TCONTROLLER, 90) /* TransformStreamDefaultController (scr_webstreams.c) */ \
+  X(WS_TEXT_DECODER, 91) /* TextDecoderStream (scr_webstreams.c) */ \
+  X(WS_TEXT_ENCODER, 92) /* TextEncoderStream (scr_webstreams.c) */ \
+  X(WS_TRANSFORM, 93) /* TransformStream for checked-dynamic code (scr_webstreams.c) */ \
+  X(WS_WCONTROLLER, 94) /* WritableStreamDefaultController (scr_webstreams.c) */ \
+  X(WS_WRITABLE, 95) /* WritableStream for checked-dynamic code (scr_webstreams.c) */ \
+  X(WS_WRITER, 96) /* WritableStreamDefaultWriter (scr_webstreams.c) */
 
 /* Tags added since the last pin, by name only (see above). */
 #define SCR_DYNH_NEW_TAGS(Y) \
-  Y(NODE_ISLAND) /* a Node island value (scr_node_island_handle.c) */ \
   Y(SEGMENTER_WORD) /* ICU word-granularity Segmenter (scr_intl.c) */ \
-  Y(SEGMENTS_WORD) /* its word segmentation result (scr_intl.c) */ \
-  Y(WS_BYTE_STRATEGY) /* ByteLengthQueuingStrategy (scr_webstreams.c) */ \
-  Y(WS_COUNT_STRATEGY) /* CountQueuingStrategy (scr_webstreams.c) */ \
-  Y(WS_RCONTROLLER) /* ReadableStreamDefaultController (scr_webstreams.c) */ \
-  Y(WS_READABLE) /* ReadableStream for checked-dynamic code (scr_webstreams.c) */ \
-  Y(WS_READER) /* ReadableStreamDefaultReader (scr_webstreams.c) */ \
-  Y(WS_TCONTROLLER) /* TransformStreamDefaultController (scr_webstreams.c) */ \
-  Y(WS_TEXT_DECODER) /* TextDecoderStream (scr_webstreams.c) */ \
-  Y(WS_TEXT_ENCODER) /* TextEncoderStream (scr_webstreams.c) */ \
-  Y(WS_TRANSFORM) /* TransformStream for checked-dynamic code (scr_webstreams.c) */ \
-  Y(WS_WCONTROLLER) /* WritableStreamDefaultController (scr_webstreams.c) */ \
-  Y(WS_WRITABLE) /* WritableStream for checked-dynamic code (scr_webstreams.c) */ \
-  Y(WS_WRITER) /* WritableStreamDefaultWriter (scr_webstreams.c) */
+  Y(SEGMENTS_WORD) /* its word segmentation result (scr_intl.c) */
 
 /* Values below the largest pinned one that no tag holds, each with the
  * reason. Never reuse one without removing it here. */
