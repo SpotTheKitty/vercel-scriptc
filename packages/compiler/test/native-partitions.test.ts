@@ -865,6 +865,81 @@ describe.runIf(helper !== null)("LLVM program partitions", () => {
     }
   });
 
+  test("a small helper that an edit adds moves no other function", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scriptc-partitions-helper-roots-"));
+    dirs.push(dir);
+    // Eight exported functions of these instruction counts and three small
+    // exported helpers, each a root of its own. The edit adds a fourth
+    // helper, which big1 calls. Counted in the loads, the added helper would
+    // raise the cap and move other functions.
+    const sizes = [426, 201, 333, 376, 152, 339, 327, 218];
+    const helper = (name: string) => [
+      `define i64 @${name}(i64 %value) noinline {`,
+      "  %r = add i64 %value, 1",
+      "  ret i64 %r",
+      "}",
+    ];
+    const source = (edited: boolean) => {
+      const lines: string[] = [];
+      sizes.forEach((size, index) => {
+        lines.push(`define i64 @big${index}(i64 %value) noinline {`);
+        for (let step = 0; step < size; step++)
+          lines.push(`  %v${step} = add i64 ${step === 0 ? "%value" : `%v${step - 1}`}, 1`);
+        if (edited && index === 1)
+          lines.push(`  %h = call i64 @added(i64 %v${size - 1})`, "  ret i64 %h");
+        else lines.push(`  ret i64 %v${size - 1}`);
+        lines.push("}");
+      });
+      for (let index = 0; index < 3; index++) lines.push(...helper(`helper${index}`));
+      if (edited) lines.push(...helper("added"));
+      lines.push("define i32 @main() {");
+      sizes.forEach((_, index) =>
+        lines.push(
+          `  %r${index} = call i64 @big${index}(i64 ${index})`,
+          `  %t${index} = add i64 ${index === 0 ? "0" : `%t${index - 1}`}, %r${index}`,
+        ),
+      );
+      for (let index = 0; index < 3; index++) {
+        const operand = index === 0 ? `%t${sizes.length - 1}` : `%h${index - 1}`;
+        lines.push(`  %h${index} = call i64 @helper${index}(i64 ${operand})`);
+      }
+      lines.push(
+        "  %low = urem i64 %h2, 251",
+        "  %code = trunc i64 %low to i32",
+        "  ret i32 %code",
+        "}",
+      );
+      return lines.join("\n") + "\n";
+    };
+    const expected = (edited: boolean) => {
+      let total = 3 + (edited ? 1 : 0);
+      sizes.forEach((size, index) => (total += index + size));
+      return total % 251;
+    };
+    const placed = async (objects: string[]) => {
+      const where = new Map<string, number>();
+      for (const [index, object] of objects.entries()) {
+        const { stdout } = await execFileAsync("nm", ["--defined-only", object]);
+        for (const line of stdout.split("\n")) {
+          const defined = /^[0-9a-fA-F]+ [A-Za-z] _?(big\d+|helper\d+|main)$/.exec(line.trim());
+          if (defined !== null) where.set(defined[1]!, index);
+        }
+      }
+      return where;
+    };
+    const cache = join(dir, "cache");
+    const options = { outputs: 4, optLevel: "0", cache } as const;
+    const objects = await emit(dir, source(false), { ...options, name: "before" });
+    expect(await exitCode(dir, objects, "before")).toBe(expected(false));
+    const before = await cacheEntries(cache, ".o");
+    const edited = await emit(dir, source(true), { ...options, name: "after" });
+    expect(await exitCode(dir, edited, "after")).toBe(expected(true));
+    expect(await placed(edited)).toEqual(await placed(objects));
+    // Only big1's partition and the new helper's change.
+    const changed = [...(await cacheEntries(cache, ".o"))].filter((entry) => !before.has(entry));
+    expect(changed.length).toBeLessThanOrEqual(2);
+  });
+
   test("a table written one element per line keeps the text partitioner and its reuse", async () => {
     const dir = await mkdtemp(join(tmpdir(), "scriptc-partitions-table-"));
     dirs.push(dir);
