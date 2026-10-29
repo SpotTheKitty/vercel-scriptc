@@ -81,12 +81,14 @@ export function fileWritesBinding(
 }
 
 /** True when `sym`'s own declarations write it after it holds a value:
- * a `var` in a for-in or for-of head is written on every iteration, and a
- * binding declared more than once (`var x = 1; ... var x = 2;`, a
- * parameter or function declaration that a `var` redeclares) is written by
- * each initializing declaration that runs. Only value declarations count;
- * a redeclaration without an initializer is counted too, which only
- * over-approximates. */
+ * a `var` in a for-in or for-of head is written on every iteration, a
+ * `var` with an initializer inside a loop body is written each time the
+ * body runs, and a binding declared more than once (`var x = 1; ... var x
+ * = 2;`, a parameter or function declaration that a `var` redeclares) is
+ * written by each initializing declaration that runs. Only value
+ * declarations count, and of functions only implementations: overload
+ * signatures have no body. A redeclaration without an initializer is
+ * counted too, which only over-approximates. */
 function declarationsWriteBinding(sym: ts.Symbol): boolean {
   let values = 0;
   let initializing = 0;
@@ -108,13 +110,45 @@ function declarationsWriteBinding(sym: ts.Symbol): boolean {
       )
         return true;
       values++;
-      if (root.initializer !== undefined) initializing++;
-    } else if (ts.isParameter(root) || ts.isFunctionDeclaration(d) || ts.isClassDeclaration(d)) {
+      if (root.initializer !== undefined) {
+        if (insideLoopBody(root)) return true;
+        initializing++;
+      }
+    } else if (
+      ts.isParameter(root) ||
+      (ts.isFunctionDeclaration(d) && d.body !== undefined) ||
+      ts.isClassDeclaration(d)
+    ) {
       values++;
       initializing++;
     }
   }
   return values > 1 && initializing > 0;
+}
+
+/** Whether a declaration sits in the body of a loop of its own function,
+ * where it runs once per iteration. */
+function insideLoopBody(node: ts.Node): boolean {
+  let child = node;
+  for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
+    if (
+      ts.isFunctionLike(parent) ||
+      ts.isClassStaticBlockDeclaration(parent) ||
+      ts.isSourceFile(parent)
+    )
+      return false;
+    if (
+      (ts.isForStatement(parent) ||
+        ts.isForInStatement(parent) ||
+        ts.isForOfStatement(parent) ||
+        ts.isWhileStatement(parent) ||
+        ts.isDoStatement(parent)) &&
+      parent.statement === child
+    )
+      return true;
+    child = parent;
+  }
+  return false;
 }
 
 /** Strips the value-preserving wrappers off an expression: parens,

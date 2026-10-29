@@ -98,11 +98,24 @@ function loopVar(): string {
   return readers.map((reader) => reader()).join(" ");
 }
 
+// A `var` with an initializer in a loop body is one binding the body writes
+// on every iteration: closures returned in earlier iterations read the last
+// value. (The binding is declared with the type its hoisted storage has.)
+function loopInitializer(): string {
+  const readers: Array<() => string> = [];
+  for (let i = 0; i < 3; i++) {
+    var step: string | undefined = `s${i}`;
+    const make = <T,>(value: T): (() => string) => () => `${step}${String(value)}`;
+    readers.push(make(i));
+  }
+  return readers.map((reader) => reader()).join(" ");
+}
+
 async function main(): Promise<void> {
   console.log((await makeRunner("p").run(2)).join(" "));
   console.log(accumulate(5));
   console.log(snapshots());
   console.log(depth());
-  console.log(redeclared(), loopVar());
+  console.log(redeclared(), loopVar(), loopInitializer());
 }
 main();
