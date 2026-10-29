@@ -171,7 +171,7 @@ static void scr_watch_file_poll(ScrClosure *cb) {
   if (p == NULL) return;
   p->timer = 0; /* the loop consumed this arm */
   int err = 0;
-  ScrStats *cur = scr_stats_of_path(p->path, &err);
+  ScrStats *cur = scr_stats_poll_path(p->path, &err);
   if (cur == NULL) {
     if (p->state != -err) {
       scr_watch_file_emit(p, NULL, p->last, -err);

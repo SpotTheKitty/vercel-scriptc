@@ -426,6 +426,8 @@ const RUNTIME_DEFINES: readonly {
   { define: "SCR_NATIVE_REACTIONS", when: (opts) => opts.webStreams },
   { define: "SCR_HANDLE_CLASSES", when: (opts) => opts.webStreams },
   { define: "SCR_YIN", when: (opts) => opts.youngNursery },
+  // scr_lib.c's path stat and zero Stats for the fs.watchFile poll.
+  { define: "SCR_FS_WATCH_FILE", when: (opts) => opts.watchFile },
   { define: "SCR_NODE_ISLANDS", when: (opts) => opts.nodeIsland },
 ];
 

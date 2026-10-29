@@ -274,6 +274,17 @@ export function variantsFor(source) {
       defines: ["SCR_TEXT_DECODER_LEGACY"],
     });
   }
+  // fs.watchFile's poll needs a path stat that reports the errno (its failed
+  // poll IS a reportable event). The Stats snapshot is private to scr_lib.c,
+  // so the two entry points live in a build of that unit only programs that
+  // poll link; every other program keeps the default object, byte for byte.
+  if (source === "scr_lib.c") {
+    variants.push({
+      id: "fs-watch-file",
+      when: { watchFile: true },
+      defines: ["SCR_FS_WATCH_FILE"],
+    });
+  }
   // Programs that assign process.emitWarning link the replacement-aware
   // warning paths; every other program keeps the default object.
   if (source === "scr_async_dyn.c") {
