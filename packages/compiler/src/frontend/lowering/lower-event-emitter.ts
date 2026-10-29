@@ -2549,7 +2549,24 @@ export function lowerEventsOnce(lowerer: Lowerer, call: ts.CallExpression, loc: 
       nameT.value === "drain" &&
       args.length === 2
     ) {
-      return { kind: "libCall", fn: "events.pendingForever", args: [], type: resultT, loc };
+      const pending: IrExpr = {
+        kind: "libCall",
+        fn: "events.pendingForever",
+        args: [],
+        type: resultT,
+        loc,
+      };
+      let name = args[1]!;
+      while (ts.isParenthesizedExpression(name)) name = name.expression;
+      if (ts.isStringLiteralLike(name)) return pending;
+      // A name expression typed "drain" still runs (`pick()`, `(log(), "drain")`).
+      return {
+        kind: "seqExpr",
+        stmts: [{ kind: "exprStmt", expr: lowerer.lowerExpr(args[1]!), loc }],
+        result: pending,
+        type: resultT,
+        loc,
+      };
     }
   }
   // A checked-dynamic NodeJS stream slot (dyn-streams.ts): a native stream

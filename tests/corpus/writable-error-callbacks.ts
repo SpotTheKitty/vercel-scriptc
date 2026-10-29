@@ -51,3 +51,16 @@ const plain = new Writable({
   },
 });
 plain.write("x", () => console.log("plain done"));
+
+// Callbacks that return a value: the stream discards it.
+let count = 0;
+const counted = (): number => ++count;
+plain.write("y", counted);
+const tally = (error?: Error | null): number => (error ? -1 : ++count);
+const counting = new Writable({
+  write(_chunk: Buffer, _encoding: string, callback: (error?: Error | null) => void): void {
+    callback(null);
+  },
+});
+counting.write("tally", tally);
+setTimeout(() => console.log("count", count), 5);

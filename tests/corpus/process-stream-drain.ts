@@ -43,4 +43,14 @@ void (async () => {
   console.log("never");
 })();
 
+// A name expression typed "drain" still runs.
+let picks = 0;
+const drainName = (): "drain" => {
+  picks++;
+  return "drain";
+};
+void once(process.stdout, drainName());
+void once(process.stderr, (picks++, "drain"));
+console.log("picks", picks);
+
 setTimeout(() => console.log("drained", drained), 5);
