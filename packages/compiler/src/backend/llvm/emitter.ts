@@ -8585,6 +8585,7 @@ for (const op of [
   "dyn.promiseDynAdapterHelper",
   "dyn.dynFuncThunkHelper",
   "dyn.dynFuncBoxHelper",
+  "dyn.jsEntryThunk",
   "dyn.dynFuncAdapterHelper",
   "dyn.dynToStrHelper",
   "dyn.dynIterNHelper",
