@@ -92,7 +92,13 @@ type EarlyErrorCode = (typeof EARLY_ERROR_CODES)[number];
  * reach into nested blocks (a `var` anywhere below the block belongs to it)
  * but never into a function or class body. The duplicate rule's one carve-out
  * is Annex B's B.3.3.1: two plain function declarations of the same name in
- * the same block are legal in non-strict code. */
+ * the same block are legal in non-strict code.
+ *
+ * A function body and a class static block have the same two rules over
+ * their top-level declarations (FunctionStatementList and
+ * ClassStaticBlockStatementList), but there a function declaration is
+ * var-scoped: it is one of the VarDeclaredNames, so two of them are legal in
+ * strict code too, while `let f; function f() {}` still collides. */
 
 function checkStatementListScope(
   sf: ts.SourceFile,
@@ -107,10 +113,11 @@ function checkStatementListScope(
   }
   if (statements === null) return;
   if (statements.length < 2) return;
+  const functionBody = isFunctionBody(node);
 
   const lexical = new Map<string, ts.Node[]>();
   for (const stmt of statements) {
-    for (const [name, decl] of lexicalDeclarationsOf(stmt)) {
+    for (const [name, decl] of lexicalDeclarationsOf(stmt, functionBody)) {
       const list = lexical.get(name);
       if (list === undefined) lexical.set(name, [decl]);
       else list.push(decl);
@@ -119,7 +126,11 @@ function checkStatementListScope(
   if (lexical.size === 0) return;
 
   const varNames = new Set<string>();
-  for (const stmt of statements) collectVarDeclaredNames(stmt, varNames);
+  for (const stmt of statements) {
+    collectVarDeclaredNames(stmt, varNames);
+    if (functionBody && ts.isFunctionDeclaration(stmt) && stmt.name !== undefined)
+      varNames.add(stmt.name.text);
+  }
 
   for (const [name, decls] of lexical) {
     if (varNames.has(name)) {
@@ -127,7 +138,9 @@ function checkStatementListScope(
         diags,
         LEXICAL_VAR_COLLISION,
         decls[0]!,
-        `the lexical declaration '${name}' collides with a 'var' declaration of the same name in this block`,
+        functionBody
+          ? `the lexical declaration '${name}' collides with a 'var' or function declaration of the same name in this function body`
+          : `the lexical declaration '${name}' collides with a 'var' declaration of the same name in this block`,
       );
       continue;
     }
@@ -146,10 +159,22 @@ function checkStatementListScope(
   }
 }
 
+/** Whether a block is the body of a function or a class static block, whose
+ * top-level function declarations are var-scoped. */
+function isFunctionBody(node: ts.Node): boolean {
+  const parent = node.parent;
+  if (parent === undefined || !ts.isBlock(node)) return false;
+  if (ts.isClassStaticBlockDeclaration(parent)) return true;
+  return ts.isFunctionLike(parent) && (parent as { body?: ts.Node }).body === node;
+}
+
 /** The names a DIRECT statement of a statement list declares lexically
- * (let/const/using, class, and every function declaration form), paired with
- * the node to point the diagnostic at. */
-function lexicalDeclarationsOf(stmt: ts.Statement): Array<[string, ts.Node]> {
+ * (let/const/using, class, and every function declaration form outside a
+ * function body), paired with the node to point the diagnostic at. */
+function lexicalDeclarationsOf(
+  stmt: ts.Statement,
+  functionBody: boolean,
+): Array<[string, ts.Node]> {
   const names: Array<[string, ts.Node]> = [];
   if (ts.isVariableStatement(stmt)) {
     if ((stmt.declarationList.flags & ts.NodeFlags.BlockScoped) === 0) return names;
@@ -157,7 +182,7 @@ function lexicalDeclarationsOf(stmt: ts.Statement): Array<[string, ts.Node]> {
       collectBindingNames(decl.name, names);
     return names;
   }
-  if (ts.isClassDeclaration(stmt) || ts.isFunctionDeclaration(stmt)) {
+  if (ts.isClassDeclaration(stmt) || (ts.isFunctionDeclaration(stmt) && !functionBody)) {
     const name = stmt.name;
     if (name !== undefined && ts.isIdentifier(name)) names.push([name.text, stmt]);
   }
@@ -322,28 +347,23 @@ function labelledFunctionOf(stmt: ts.Statement): ts.FunctionDeclaration | null {
 /* ── strictness of the code around a node ───────────────────────────────
  *
  * A directive prologue's "use strict" applies to the function (or script) it
- * opens, arrows cannot carry one, and a class body is strict by
- * construction. Module sources are strict whether they say so or not, and
- * Node's classification — not the checker's forced external-module scope —
- * decides which sources are modules. */
+ * opens, an arrow function's block body included, and every part of a class is strict by
+ * construction. Object literal methods and accessors are ordinary functions:
+ * strict only by their own prologue or their surroundings. Module sources are
+ * strict whether they say so or not, and Node's classification — not the
+ * checker's forced external-module scope — decides which sources are modules.
+ *
+ * The walk starts at the node's parent: a function declaration's own "use
+ * strict" makes its body strict, not the code that declares it. */
 function isStrictCode(
   sf: ts.SourceFile,
   node: ts.Node,
   isModuleCode: (sf: ts.SourceFile) => boolean,
 ): boolean {
   if (isModuleCode(sf)) return true;
-  for (let n: ts.Node | undefined = node; n !== undefined; n = n.parent) {
+  for (let n: ts.Node | undefined = node.parent; n !== undefined; n = n.parent) {
     if (ts.isSourceFile(n)) return hasUseStrictPrologue(n.statements.nodes);
-    if (
-      ts.isClassStaticBlockDeclaration(n) ||
-      ts.isMethodDeclaration(n) ||
-      ts.isConstructorDeclaration(n) ||
-      ts.isGetAccessorDeclaration(n) ||
-      ts.isSetAccessorDeclaration(n) ||
-      ts.isPropertyDeclaration(n)
-    )
-      return true;
-    if (ts.isArrowFunction(n)) continue;
+    if (ts.isClassDeclaration(n) || ts.isClassExpression(n)) return true;
     if (ts.isFunctionLike(n)) {
       const body = n.body;
       if (body !== undefined && ts.isBlock(body) && hasUseStrictPrologue(body.statements.nodes))

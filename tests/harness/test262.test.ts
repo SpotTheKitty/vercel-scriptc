@@ -205,6 +205,23 @@ assert.notSameValue(1, "1");
     source: "assert(compareArray(1, 2)); assert(compareArray({}, {}));",
   },
   {
+    name: "bare compareArray compares the elements of a string length",
+    status: "pass",
+    source:
+      'assert(!compareArray({ length: "2", 0: 1, 1: 2 }, { length: "2", 0: 1, 1: 3 })); assert(compareArray({ length: "1", 0: 1 }, { length: "1", 0: 1 }));',
+  },
+  {
+    name: "bare compareArray reads the lengths in the upstream order",
+    status: "pass",
+    source: `
+var log = [];
+var a = { get length() { log.push("a"); return 1; }, 0: 1 };
+var b = { get length() { log.push("b"); return 1; }, 0: 1 };
+assert(compareArray(a, b));
+assert.compareArray(log, ["b", "a", "a", "a"]);
+`,
+  },
+  {
     name: "bare compareArray does not throw on a mismatch",
     status: "fail",
     source: "assert(compareArray([1], [2]));",
