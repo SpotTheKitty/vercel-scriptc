@@ -1227,23 +1227,32 @@ ScrBytes *scr_crypto_random_bytes(double n) {
 /* ── process.stdout/stderr.write(buf) ──────────────────────────────────── */
 
 /* Where another thread can write shared bytes (where SCR_BYTES_SNAPSHOT
- * copies them), they are written through a bounded local buffer, read with
- * scr_shared_load, so no shared raw memory reaches the system call and a
- * large shared view is not copied whole first. */
+ * copies them), they are read with scr_shared_load, so no shared raw memory
+ * reaches the system call. Written to the stream itself, they go through a
+ * bounded local buffer, so a large shared view is not copied whole first.
+ * With a write hook (the program reads process.stdout or process.stderr as
+ * a value, and may have replaced its write), the view is copied whole: a
+ * replaced write receives it in one call, as in Node, whatever it returns. */
 static bool scr_stdio_write_bytes(int fd, const ScrBytes *b) {
   size_t n = b->len * scr_bytes_elem_size(b->elem);
 #if defined(SCR_WORKERS) || (defined(SCR_LIB) && defined(SCR_THREAD_INSTANCES))
   if (!b->shared) return scr_stdio_write(fd, b->data, n);
+  if (scr_stdio_write_hook) {
+    unsigned char *copy = scr_mem_alloc(n ? n : 1);
+    scr_shared_load(copy, b->data, n);
+    bool ok = scr_stdio_write(fd, copy, n);
+    scr_mem_free(copy);
+    return ok;
+  }
   enum { CHUNK = 64 * 1024 };
   unsigned char *chunk = scr_mem_alloc(n < CHUNK ? (n ? n : 1) : CHUNK);
-  bool ok = true;
-  for (size_t off = 0; ok && off < n; off += CHUNK) {
+  for (size_t off = 0; off < n; off += CHUNK) {
     size_t k = n - off < CHUNK ? n - off : CHUNK;
     scr_shared_load(chunk, b->data + off, k);
-    ok = scr_stdio_write(fd, chunk, k);
+    (void)scr_stdio_write_raw(fd, chunk, k);
   }
   scr_mem_free(chunk);
-  return ok;
+  return true;
 #else
   return scr_stdio_write(fd, b->data, n);
 #endif

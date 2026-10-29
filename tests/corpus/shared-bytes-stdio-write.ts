@@ -18,6 +18,19 @@ if (isMainThread) {
 
     process.stderr.write(new Uint8Array(sab, 63, 70_000));
     process.stderr.write("\n");
+
+    // A replaced write receives the whole view in one call, even when it
+    // returns false.
+    const out = process.stdout as unknown as Record<string, unknown>;
+    const original = out["write"];
+    const sizes: number[] = [];
+    out["write"] = (chunk: unknown): boolean => {
+      sizes.push(typeof chunk === "string" ? chunk.length : (chunk as Uint8Array).length);
+      return false;
+    };
+    const accepted = process.stdout.write(new Uint8Array(sab, 1000, 150_000));
+    out["write"] = original;
+    console.log("replaced", accepted, sizes.join(","));
     console.log("done");
   });
 } else {
