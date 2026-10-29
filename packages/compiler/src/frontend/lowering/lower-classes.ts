@@ -1,3 +1,4 @@
+import { lowerWrapperNew } from "./primitive-wrappers.js";
 import { lowerAsyncLocalStorageOptions } from "./builtins/async-context.js";
 import { shapeOverlayAnnotated } from "../shape-inference/index.js";
 import {
@@ -10189,6 +10190,8 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
       return lowerWithInlineRequireInit(lowerer, req, () => lowerNew(lowerer, expr));
     }
   }
+  const wrapper = lowerWrapperNew(lowerer, expr);
+  if (wrapper) return wrapper;
   const worker = lowerWorkerNew(lowerer, expr);
   if (worker) return worker;
   const readlineUi = lowerReadlineUiNew(lowerer, expr) ?? lowerReadlineInterfaceNew(lowerer, expr);

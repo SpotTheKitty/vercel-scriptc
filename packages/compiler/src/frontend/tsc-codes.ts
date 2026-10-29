@@ -114,6 +114,9 @@ export const JS_RELAXED_TSC_CODES: ReadonlySet<number> = new Set([
   // differs (adopted options, hidden declaration twins), and an unused
   // suppression changes nothing at runtime
   2578,
+  // a primitive on the left of instanceof (`"x" instanceof String`): Node
+  // answers false, which the lowering folds
+  2358,
   // a lib-floor demand (es2024+ members under the es2023 lib): the member
   // types as the error-any and its use fences per site with the honest
   // no-lowering story instead of gating the whole program

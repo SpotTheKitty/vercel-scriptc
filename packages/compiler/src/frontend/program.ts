@@ -1528,8 +1528,16 @@ function suppressedJsStrictness7(d: ts.Diagnostic): boolean {
   // runtime meaning in a JS file.
   if (d.code >= 8000 && d.code <= 8999) return true;
   if (JS_ANY_OPERATOR_CODES.has(d.code)) {
-    return ts.flattenDiagnosticMessageText(d, "\n").includes("'any'");
+    const text = ts.flattenDiagnosticMessageText(d, "\n");
+    // A primitive wrapper operand (`new Number(1) * 2`): the operator
+    // converts it with ToPrimitive, as for any object.
+    return text.includes("'any'") || /'(Number|String|Boolean)'/.test(text);
   }
+  // An index write on a String wrapper (`new String("ab")[5] = "q"`): Node
+  // adds the property past the end and ignores writes to the read-only
+  // index properties (sloppy) or throws (strict), as the object does.
+  if (d.code === 2542 && ts.flattenDiagnosticMessageText(d, "\n").includes("type 'String'"))
+    return true;
   // The deprecated Buffer(...) call without `new`, which Node's Buffer
   // function accepts (containers/bytes.ts lowers it), and fs.ReadStream(...)
   // and fs.WriteStream(...), which construct their stream

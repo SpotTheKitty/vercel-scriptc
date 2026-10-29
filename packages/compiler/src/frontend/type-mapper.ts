@@ -1369,6 +1369,11 @@ export type TypeParamTsResolver = (t: ts.Type) => ts.Type | null;
  * once per Lowerer and threaded through the recursion — adding a hook means
  * one new field here, not a new parameter at every call site. */
 export interface TypeMapperCtx {
+  /** Whether the program creates primitive wrapper objects
+   * (primitive-wrappers.ts): then the boxed interface types (`String`,
+   * `Number`, `Boolean`) map to the checked-dynamic value instead of the
+   * primitive. Absent or false: every mapping is unchanged. */
+  primitiveWrappers?: () => boolean;
   /** Node islands (scope-B NI-4): whether a type's values are island
    * handles, which map to the `foreign` type (a dyn value). Absent in
    * programs without islands. */
@@ -2408,6 +2413,9 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
         ts.symbolName(boxSym) === "Boolean") &&
       boxSym.declarations.some((d) => ctx.isStdlibFile(ts.getSourceFileOfNode(d)))
     ) {
+      // Once the program creates wrapper objects, a slot of the boxed type
+      // may hold one: the checked-dynamic value holds both.
+      if (ctx.primitiveWrappers?.()) return DYN;
       return ts.symbolName(boxSym) === "Number"
         ? F64
         : ts.symbolName(boxSym) === "String"

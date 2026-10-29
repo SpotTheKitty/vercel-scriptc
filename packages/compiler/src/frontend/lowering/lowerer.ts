@@ -1,3 +1,4 @@
+import { programCreatesWrappers, routeWrapperConsumers } from "./primitive-wrappers.js";
 import type { DiagnosticCode } from "../../diagnostics/codes.js";
 import { markInferredFactChecks, shapeOverlayFileNames } from "../shape-inference/index.js";
 import { npmStaticPackageOfPath } from "../npm-static.js";
@@ -3485,6 +3486,9 @@ export class Lowerer {
    * interned here so references under one source-world ABI are the SAME
    * zero-capture closure (see primitiveCtorClosure). */
   readonly primitiveCtorFns = new Map<string, string>();
+  /** Whether a compiled source creates primitive wrapper objects
+   * (programCreatesWrappers), computed on first use. */
+  createsWrappers: boolean | undefined = undefined;
   /** Builtin-module FUNCTIONS admitted as values by their surface-table
    * entries. The resolved runtime function plus ABI is the identity key,
    * so named imports, namespace reads, CommonJS bindings, and alias chains
@@ -5134,6 +5138,7 @@ export class Lowerer {
       mixinIntersectionInstance: (widened) => mixinIntersectionInstanceType(this, widened),
       classImplementedProtocol: (type) => this.classImplementedProtocol(type),
       isStdlibFile: (sf) => this.isStdlibFile(sf),
+      primitiveWrappers: () => (this.createsWrappers ??= programCreatesWrappers(this)),
       isNpmFile: (sf) => this.isNpmFile(sf),
       isExperimentalFile: (sf) => isExperimentalDeclarationFile(sf, this.experimentalFiles),
       // The declaration-typed boundary's generated types (decl-projection.ts)
@@ -9655,6 +9660,7 @@ export class Lowerer {
     if (this.diags.length === 0) fuseArrayPipelines(this, functions);
     finalizeClassMethodValues(this, functions);
     finalizePrivateBrands(this, functions);
+    routeWrapperConsumers(this, functions);
     trackClassFieldCreation(this, functions);
     boxClassInstancesExactly(this, functions);
     addUntypedIntegrityWords(this);
