@@ -5060,6 +5060,8 @@ export class LlEmitter {
         idx,
         (decl) => this.declare(decl),
         this.rcMode === undefined,
+        (text) => this.cstr(text),
+        this.shapeHost.recordViews?.partialTargets.has(shapeId) === true,
       );
     } else {
       p = this.B.tmp();
