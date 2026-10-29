@@ -966,10 +966,12 @@ registerReplay("streamDoneFnFor", (host, args) =>
 registerReplay("fsRenameThunkFor", (host, args) =>
   fsRenameThunkFor(host, args[0] as IrType & { kind: "func" }),
 );
-/** The (eventType, filename) fs.watch listener adapter: the runtime hands
+/** The fs.watch listener adapter for an (eventType, filename) listener, or
+ * for an (eventType) listener whose parameter is dynamic: the runtime hands
  * the borrowed C strings, the thunk builds what the listener declared. The
  * listener owns its +1 arguments (the universal convention
- * scr_watch_thunk_event follows). */
+ * scr_watch_thunk_event follows), so a string the thunk boxes into a dynamic
+ * value is released once the box holds it. */
 export function watchNameThunkFor(
   host: LlvmEmitterContext,
   cbT: IrType & { kind: "func" },
@@ -989,76 +991,84 @@ export function watchNameThunkFor(
     `entry:`,
     `  %evlen = call ${S} @strlen(ptr %event)`,
     `  %evstr = call ptr @scr_str_new(ptr %event, ${S} %evlen)`,
-    `  %slot = alloca ptr`,
-    `  %has = icmp ne ptr %name, null`,
-    `  br i1 %has, label %yes, label %no`,
-    `yes:`,
   ];
-  const nameParam = cbT.params[1]!;
-  if (nameParam.kind === "dyn") {
-    host.declare(`declare ptr @scr_dyn_new_null()`);
-    host.declare(`declare ptr @scr_dyn_new_str(ptr)`);
+  const named = cbT.params.length === 2;
+  if (named) {
     d.push(
-      `  %nlen = call ${S} @strlen(ptr %name)`,
-      `  %nstr = call ptr @scr_str_new(ptr %name, ${S} %nlen)`,
-      `  %ndyn = call ptr @scr_dyn_new_str(ptr %nstr)`,
-      `  call void @scr_str_release(ptr %nstr)`,
-      `  store ptr %ndyn, ptr %slot`,
-      `  br label %go`,
-      `no:`,
-      `  %dn = call ptr @scr_dyn_new_null()`,
-      `  store ptr %dn, ptr %slot`,
+      `  %slot = alloca ptr`,
+      `  %has = icmp ne ptr %name, null`,
+      `  br i1 %has, label %yes, label %no`,
+      `yes:`,
     );
-  } else {
-    if (nameParam.kind !== "union")
-      throw new InternalCompilerError("llvm emitter bug: fs.watch filename param is not a union");
-    const def = host.unionsById.get(nameParam.unionId);
-    const strTag = def ? def.arms.findIndex((a) => a.kind === "string") : -1;
-    const nullTag = def ? def.arms.findIndex((a) => a.kind === "nullT") : -1;
-    if (strTag < 0 || nullTag < 0)
-      throw new InternalCompilerError("llvm emitter bug: fs.watch filename union lacks its arms");
-    if (host.nullableUnions.has(nameParam.unionId)) {
-      // `string | null` erases: the owned payload IS the union's value.
+    const nameParam = cbT.params[1]!;
+    if (nameParam.kind === "dyn") {
+      host.declare(`declare ptr @scr_dyn_new_null()`);
+      host.declare(`declare ptr @scr_dyn_new_str(ptr)`);
       d.push(
         `  %nlen = call ${S} @strlen(ptr %name)`,
         `  %nstr = call ptr @scr_str_new(ptr %name, ${S} %nlen)`,
-        `  store ptr %nstr, ptr %slot`,
+        `  %ndyn = call ptr @scr_dyn_new_str(ptr %nstr)`,
+        `  call void @scr_str_release(ptr %nstr)`,
+        `  store ptr %ndyn, ptr %slot`,
         `  br label %go`,
         `no:`,
-        `  store ptr null, ptr %slot`,
+        `  %dn = call ptr @scr_dyn_new_null()`,
+        `  store ptr %dn, ptr %slot`,
       );
     } else {
-      const rc = vAdapters(host.shapeHost, STRING);
-      host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
-      d.push(
-        `  %nlen = call ${S} @strlen(ptr %name)`,
-        `  %nstr = call ptr @scr_str_new(ptr %name, ${S} %nlen)`,
-        `  %nu = call ptr @scr_union_new_ref(i32 ${strTag}, ptr %nstr, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(host.shapeHost, STRING)})`,
-        `  store ptr %nu, ptr %slot`,
-        `  br label %go`,
-        `no:`,
-        `  store ptr ${host.unitInstanceRef(nameParam.unionId, nullTag)}, ptr %slot`,
-      );
+      if (nameParam.kind !== "union")
+        throw new InternalCompilerError("llvm emitter bug: fs.watch filename param is not a union");
+      const def = host.unionsById.get(nameParam.unionId);
+      const strTag = def ? def.arms.findIndex((a) => a.kind === "string") : -1;
+      const nullTag = def ? def.arms.findIndex((a) => a.kind === "nullT") : -1;
+      if (strTag < 0 || nullTag < 0)
+        throw new InternalCompilerError("llvm emitter bug: fs.watch filename union lacks its arms");
+      if (host.nullableUnions.has(nameParam.unionId)) {
+        // `string | null` erases: the owned payload IS the union's value.
+        d.push(
+          `  %nlen = call ${S} @strlen(ptr %name)`,
+          `  %nstr = call ptr @scr_str_new(ptr %name, ${S} %nlen)`,
+          `  store ptr %nstr, ptr %slot`,
+          `  br label %go`,
+          `no:`,
+          `  store ptr null, ptr %slot`,
+        );
+      } else {
+        const rc = vAdapters(host.shapeHost, STRING);
+        host.declare(`declare ptr @scr_union_new_ref(i32, ptr, ptr, ptr, ptr)`);
+        d.push(
+          `  %nlen = call ${S} @strlen(ptr %name)`,
+          `  %nstr = call ptr @scr_str_new(ptr %name, ${S} %nlen)`,
+          `  %nu = call ptr @scr_union_new_ref(i32 ${strTag}, ptr %nstr, ptr ${rc.retain}, ptr ${rc.release}, ptr ${traceArg(host.shapeHost, STRING)})`,
+          `  store ptr %nu, ptr %slot`,
+          `  br label %go`,
+          `no:`,
+          `  store ptr ${host.unitInstanceRef(nameParam.unionId, nullTag)}, ptr %slot`,
+        );
+      }
     }
+    d.push(`  br label %go`, `go:`);
   }
   let ev: string;
   if (cbT.params[0]?.kind === "dyn") {
+    // The box retains the string; the thunk's own reference goes.
     host.declare(`declare ptr @scr_dyn_new_str(ptr)`);
-    d.push(`  br label %go`, `go:`, `  %evd = call ptr @scr_dyn_new_str(ptr %evstr)`);
+    d.push(
+      `  %evd = call ptr @scr_dyn_new_str(ptr %evstr)`,
+      `  call void @scr_str_release(ptr %evstr)`,
+    );
     ev = "%evd";
   } else {
-    d.push(`  br label %go`, `go:`);
     ev = "%evstr";
   }
   d.push(
-    `  %arg = load ptr, ptr %slot`,
     `  %fnp = getelementptr inbounds %ScrClosure, ptr %cb, i64 0, i32 1`,
     `  %fn = load ptr, ptr %fnp`,
-    `  call void %fn(ptr %cb, ptr ${ev}, ptr %arg)`,
-    `  ret void`,
-    `}`,
-    ``,
   );
+  if (named)
+    d.push(`  %arg = load ptr, ptr %slot`, `  call void %fn(ptr %cb, ptr ${ev}, ptr %arg)`);
+  else d.push(`  call void %fn(ptr %cb, ptr ${ev})`);
+  d.push(`  ret void`, `}`, ``);
   host.resolveThunkDefs.push(...d);
   host.journal?.built();
   return sym;

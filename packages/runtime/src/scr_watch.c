@@ -288,6 +288,12 @@ void scr_watcher_release_v(void *p) { scr_watcher_release((ScrWatcher *)p); }
  * filter. cb (nullable) moves in as the first listener. Result +1. */
 ScrWatcher *scr_fs_watch(ScrStr *path, ScrClosure *cb /*moves, nullable*/, ScrWatchFn fn,
                          bool wants_name) {
+  /* getValidatedPath: a null byte throws ERR_INVALID_ARG_VALUE before the
+   * path reaches the platform call. */
+  if (!scr_fs_path_ok(path, "path")) {
+    if (cb != NULL) scr_closure_release(cb);
+    return NULL; /* exception pending */
+  }
 #ifdef SCR_HAVE_INOTIFY
   /* The wd IS the validation: Node's Linux throw comes straight from
    * inotify_add_watch's errno, the same message shape as the open below. */
@@ -542,7 +548,7 @@ void scr_watcher_off(ScrWatcher *w, double event, ScrClosure *cb) {
     ScrWatchL *l = &w->ls[i - 1];
     if (l->event != (uint8_t)event || l->cb != cb) continue;
     scr_closure_release(l->cb);
-    memmove(l + 1, l, (w->n - i) * sizeof *w->ls);
+    memmove(l, l + 1, (w->n - i) * sizeof *w->ls);
     w->n--;
     return;
   }

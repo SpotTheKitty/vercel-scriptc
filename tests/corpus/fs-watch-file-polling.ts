@@ -5,7 +5,9 @@
 // sides zeroed, and the creation reports previous.size 0 and previous.mtimeMs 0. Two watchFile calls on one path share one poller;
 // unwatchFile(path, listener) removes one listener, unwatchFile(path)
 // removes the rest, and once no listener is left the poller stops and
-// the process can exit.
+// the process can exit. A new poller's interval must be a uint32 (a call on
+// a watched path ignores its options), and a path holding a null byte
+// throws for both calls.
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -14,6 +16,26 @@ const dir = fs.mkdtempSync(join(tmpdir(), "scr-watchfile-"));
 const existing = join(dir, "existing.txt");
 const later = join(dir, "later.txt");
 fs.writeFileSync(existing, "a");
+
+const invalid = join(dir, "invalid.txt");
+for (const interval of [-1, 1.5, Number.NaN, 2 ** 32]) {
+  try {
+    fs.watchFile(invalid, { interval }, () => {});
+    console.log("interval", interval, "accepted");
+  } catch (err) {
+    console.log("interval", interval, (err as NodeJS.ErrnoException).code, (err as Error).message);
+  }
+}
+try {
+  fs.watchFile("bad\0path", () => {});
+} catch (err) {
+  console.log("watchFile", (err as NodeJS.ErrnoException).code, (err as Error).message);
+}
+try {
+  fs.unwatchFile("bad\0path");
+} catch (err) {
+  console.log("unwatchFile", (err as NodeJS.ErrnoException).code, (err as Error).message);
+}
 
 let firstCalls = 0;
 const first = (current: fs.Stats, previous: fs.Stats): void => {
@@ -27,7 +49,7 @@ const second = (current: fs.Stats, previous: fs.Stats): void => {
   startMissingPhase();
 };
 fs.watchFile(existing, { interval: 20 }, first);
-fs.watchFile(existing, { interval: 1000 }, second);
+fs.watchFile(existing, { interval: -1 }, second);
 setTimeout(() => fs.writeFileSync(existing, "abcd"), 150);
 
 function startMissingPhase(): void {

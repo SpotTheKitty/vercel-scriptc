@@ -2416,6 +2416,22 @@ function buildAmbientSurfaceFns(): readonly AmbientSurfaceRow[] {
       fns: ["fs.callbackValue", "fs.callbackCall", "fs.callbackGlob"],
       note: "native filesystem callbacks, including stored platform adapter functions",
     },
+    // fs.watchFile/fs.unwatchFile lower in lowerFsWatchFileCall, ahead of
+    // the module table.
+    {
+      id: "node-builtin.fs.watchFile",
+      kind: "node-builtin",
+      name: "fs.watchFile",
+      fns: ["fs.watchFile"],
+      note: "stat polling of a resolved path with Stats listeners, in statement position; bigint: true is refused",
+    },
+    {
+      id: "node-builtin.fs.unwatchFile",
+      kind: "node-builtin",
+      name: "fs.unwatchFile",
+      fns: ["fs.unwatchFile"],
+      note: "removes one listener, or every listener, from a resolved path's poller",
+    },
     // ── the Date slice (lowerDateCall/lowerNew): statics, construction,
     // stored read-only values, calendar getters, and ISO formatting.
     {

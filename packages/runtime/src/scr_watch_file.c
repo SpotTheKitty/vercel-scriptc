@@ -32,6 +32,7 @@
 #include "scr_runtime.h"
 
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -230,17 +231,42 @@ static void scr_watch_file_stop(ScrWatchFiler *p) {
   scr_watch_file_release(p);
 }
 
+/* StatWatcher's validateUint32(interval, 'interval'): false after throwing
+ * Node's ERR_OUT_OF_RANGE RangeError. */
+static bool scr_watch_file_interval_ok(double interval) {
+  bool integer = isfinite(interval) && trunc(interval) == interval;
+  if (integer && interval >= 0 && interval <= 4294967295.0) return true;
+  char recv[48], msg[160];
+  scr_num_received(interval, recv);
+  int len = snprintf(msg, sizeof msg,
+                     "The value of \"interval\" is out of range. It must be %s. Received %s",
+                     integer ? ">= 0 && <= 4294967295" : "an integer", recv);
+  scr_throw_error_msg_code(SCR_ERR_RANGE, msg, (size_t)len, "ERR_OUT_OF_RANGE");
+  return false;
+}
+
 /* fs.watchFile(path, interval, persistent, listener) — the listener MOVES
- * in. A second call on the same resolved path adds the listener to the
- * existing poller and ignores its options (Node's rule). */
+ * in. A path holding a null byte throws Node's ERR_INVALID_ARG_VALUE. A
+ * second call on the same resolved path adds the listener to the existing
+ * poller and ignores its options (Node's rule); a new poller first checks
+ * `interval` as a uint32, and registers nothing when that throws. */
 void scr_fs_watch_file(ScrStr *path, double interval, bool persistent, ScrClosure *cb,
                        ScrWatchFileFn fn) {
+  if (!scr_fs_path_ok(path, "path")) {
+    scr_closure_release(cb);
+    return; /* exception pending */
+  }
   ScrStr *resolved = scr_watch_file_resolve(path);
   ScrWatchFiler *existing = scr_watch_file_find(resolved);
   if (existing != NULL) {
     scr_str_release(resolved);
     scr_watch_file_add(existing, cb, fn);
     return;
+  }
+  if (!scr_watch_file_interval_ok(interval)) {
+    scr_str_release(resolved);
+    scr_closure_release(cb);
+    return; /* exception pending */
   }
   ScrWatchFiler *p = malloc(sizeof *p);
   if (!p) {
@@ -275,8 +301,10 @@ void scr_fs_watch_file(ScrStr *path, double interval, bool persistent, ScrClosur
 
 /* fs.unwatchFile(path[, listener]) — `cb` is borrowed (pointer identity);
  * NULL removes every listener on the resolved path. Removing the last one
- * stops the poller. */
+ * stops the poller. A path holding a null byte throws Node's
+ * ERR_INVALID_ARG_VALUE. */
 void scr_fs_unwatch_file(ScrStr *path, ScrClosure *cb) {
+  if (!scr_fs_path_ok(path, "path")) return; /* exception pending */
   ScrStr *resolved = scr_watch_file_resolve(path);
   ScrWatchFiler *p = scr_watch_file_find(resolved);
   scr_str_release(resolved);
@@ -299,16 +327,17 @@ void scr_fs_unwatch_file(ScrStr *path, ScrClosure *cb) {
 }
 
 /* ── the runtime-provided listener adapters ───────────────────────────
- * The listener owns its +1 arguments (the universal convention
- * scr_watch_thunk_event follows). */
+ * The adapter receives +1 references and the listener owns those it takes
+ * (the universal convention scr_watch_thunk_event follows); the adapter
+ * releases the ones its listener has no parameter for. */
 void scr_watch_file_thunk0(ScrClosure *cb, ScrStats *current, ScrStats *previous) {
-  (void)current;
-  (void)previous;
+  scr_stats_release(current);
+  scr_stats_release(previous);
   ((void (*)(ScrClosure *))cb->fn)(cb);
 }
 
 void scr_watch_file_thunk1(ScrClosure *cb, ScrStats *current, ScrStats *previous) {
-  (void)previous;
+  scr_stats_release(previous);
   ((void (*)(ScrClosure *, ScrStats *))cb->fn)(cb, current);
 }
 
