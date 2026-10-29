@@ -975,6 +975,11 @@ const RUNTIME_FEATURE_RULES = {
       "webstream.class",
       "webstream.instanceOf",
       "webstream.install",
+      // scr_js_wrapper.c answers other values' tags through
+      // scr_dyn_object_tag_of, and its prototype methods call scr_dyn_invoke.
+      "wrapper.objectTag",
+      "wrapper.new",
+      "wrapper.toObject",
     ],
     // Constant-key reads of Object.prototype member names answer the
     // inherited member through scr_dyn_invoke.c.
@@ -1229,6 +1234,8 @@ const RUNTIME_FEATURE_RULES = {
   moduleNamespace: rule({ fns: ["module.namespaceValue"] }),
   /** A module namespace boxed for typed code (scr_module_namespace_dyn.c). */
   moduleNamespaceDyn: rule({ fns: ["module.namespaceDyn"] }),
+  /** Primitive wrapper objects (scr_js_wrapper.c). */
+  primitiveWrapper: rule({ prefixes: ["wrapper."] }),
   /** The WebAssembly API (scr_wasm.c). */
   wasm: rule({ prefixes: ["wasm."] }),
   /** crypto.subtle importKey/sign/verify/digest and CryptoKey:
@@ -1331,6 +1338,7 @@ function noRuntimeFeatures(): RuntimeFeatures {
     stdioExtended: false,
     moduleNamespace: false,
     moduleNamespaceDyn: false,
+    primitiveWrapper: false,
     stream: false,
     streamDyn: false,
     handleProps: false,

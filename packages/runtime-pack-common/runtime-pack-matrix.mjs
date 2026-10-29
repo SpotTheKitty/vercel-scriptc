@@ -102,6 +102,8 @@ export const OPTIONAL_RUNTIME_SOURCES = [
   ["scr_module_namespace.c", "moduleNamespace"],
   // The same namespace as the frozen null-prototype object typed code sees.
   ["scr_module_namespace_dyn.c", "moduleNamespaceDyn"],
+  // Primitive wrapper objects.
+  ["scr_js_wrapper.c", "primitiveWrapper"],
   // Blob and File box their reads as dyn promises through scr_async_dyn.c.
   ["scr_blob.c", "dynAsync"],
   ["scr_zlib.c", "zlib"],

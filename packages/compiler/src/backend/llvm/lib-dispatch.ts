@@ -1275,6 +1275,9 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
       return host.emitGenericLibCall(e);
     case "nodeIsland":
       return host.emitGenericLibCall(e);
+    // Primitive wrapper objects (scr_js_wrapper.c).
+    case "wrapper":
+      return host.emitGenericLibCall(e);
     case "webstream":
       // A stream's start, pull and cancel steps run as promise jobs, so
       // a program with the classes runs its event loop.

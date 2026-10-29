@@ -68,6 +68,7 @@ export interface EarlyExecutableNativeFeatures {
   nodeIsland?: boolean;
   moduleNamespace?: boolean;
   moduleNamespaceDyn?: boolean;
+  primitiveWrapper?: boolean;
   zlib: boolean;
   brotli?: boolean;
   assert: boolean;
