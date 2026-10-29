@@ -164,3 +164,19 @@ try {
 } catch (error) {
   console.log("updates", error.constructor.name, error.message);
 }
+
+// A private static field holding a rest-parameter function, or one that
+// reads `arguments`, receives every argument of a call through `this`.
+class Rest {
+  static #sum = function (...xs) {
+    return (this === Rest ? "self " : "other ") + xs.length + ":" + xs.reduce((a, b) => a + b, 0);
+  };
+  static #arrow = (first, ...rest) => first + "|" + rest.join(",");
+  static #plain = function (a, b) {
+    return [a, b, arguments.length].join("/");
+  };
+  static get run() {
+    return [this.#sum(1, 2, 3), this.#sum(), this.#arrow(1, 2, 3), this.#plain(1), this.#plain(1, 2, 3)].join(" ; ");
+  }
+}
+console.log("rest", Rest.run);

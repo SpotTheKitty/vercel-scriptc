@@ -14,7 +14,7 @@ import { hasStaticThis } from "./static-this.js";
 import type { Lowerer } from "./lowerer.js";
 import { lowerClassStaticRead, lowerStaticMethodCall, type ClassInfo } from "./lower-classes.js";
 import { tryLowerExpression } from "./expressions/try-lower-expression.js";
-import { omittedArgFor } from "./call-arguments.js";
+import { lowerCallThroughValue } from "./lower-calls.js";
 
 /** How a static private name is used: a field read or write, or a method
  * (or accessor) read or call. V8 words each failure differently. */
@@ -252,7 +252,9 @@ export function lowerStaticPrivateCall(
 /** `R.#f(args)` for a function-valued static private field on a
  * checked-dynamic receiver: the receiver, the brand check (PrivateGet's),
  * then a call through the field's value with `this` bound to the receiver,
- * as JavaScript calls a private field's function. */
+ * as JavaScript calls a private field's function. The call takes the
+ * ordinary call-through-value lanes, so rest parameters, typed rests and
+ * checked-dynamic values receive every argument. */
 function lowerStaticPrivateFieldCall(
   lowerer: Lowerer,
   call: ts.CallExpression,
@@ -261,38 +263,22 @@ function lowerStaticPrivateFieldCall(
   field: ClassInfo["staticFields"][number],
   value: IrExpr,
 ): IrExpr {
-  const fieldType = field.type;
-  if (fieldType.kind !== "func") {
+  const loc = locOf(call);
+  const receiver = lowerer.declareHiddenLocal("%staticPrivateReceiver", DYN);
+  const lowered = lowerCallThroughValue(
+    lowerer,
+    call,
+    varRef(field.globalId, field.type, loc),
+    loc,
+  );
+  if (lowered.kind !== "callValue" && lowered.kind !== "dynCall") {
     return lowerer.unsupported(
       "SC1090",
       call,
-      `calling the private static field '${name}' when it does not hold a function of a known type`,
+      `this call of the private static field '${name}' (spread arguments)`,
     );
   }
-  const loc = locOf(call);
-  const receiver = lowerer.declareHiddenLocal("%staticPrivateReceiver", DYN);
-  const args = call.arguments.nodes.map((arg, index) =>
-    lowerer.lowerExprExpecting(arg, fieldType.params[index]),
-  );
-  for (let index = args.length; index < fieldType.params.length; index++) {
-    const absent = omittedArgFor(lowerer, fieldType.params[index]!, loc);
-    if (!absent) {
-      lowerer.unsupported(
-        "SC1090",
-        call,
-        "calls omitting a non-optional parameter of the callee's type",
-      );
-    }
-    args.push(absent);
-  }
-  const result: IrExpr = {
-    kind: "callValue",
-    callee: varRef(field.globalId, fieldType, loc),
-    receiver: varRef(receiver.id, DYN, loc),
-    args,
-    type: fieldType.ret,
-    loc,
-  };
+  const result: IrExpr = { ...lowered, receiver: varRef(receiver.id, DYN, loc) };
   return {
     kind: "seqExpr",
     stmts: [
