@@ -10264,8 +10264,15 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
     lowerer.isStdlibGlobal(expr.expression.expression, "Intl")
   ) {
     const args = expr.arguments?.nodes ?? [];
-    const undefinedArg = (arg: ts.Expression): boolean =>
-      (lowerer.typeOf(arg).flags & ts.TypeFlags.Undefined) !== 0;
+    // An argument whose value IS undefined: exactly undefined, or void. A
+    // union that merely includes undefined may hold a locale or an options
+    // object at run time, and the constructor cannot inspect either — such
+    // an argument is refused below rather than silently read as the default
+    // locale or the default options.
+    const undefinedArg = (arg: ts.Expression): boolean => {
+      const flags = lowerer.typeOf(arg).flags;
+      return flags === ts.TypeFlags.Undefined || flags === ts.TypeFlags.Void;
+    };
     // A literal language tag: Unicode grapheme clusters have no locale
     // tailoring. Only tags of the form language[-script][-region] are
     // accepted; each is well-formed, so Node constructs the segmenter
@@ -10280,13 +10287,14 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         "omit the locale, pass undefined, or pass one language tag as a string literal",
       );
     }
-    // JavaScript dependencies may construct word and sentence segmenters
-    // that they use only on some paths (pi-tui's shared word segmenter):
-    // the construction compiles and their segment() throws SC2020.
-    // TypeScript sources keep the build-time refusal.
+    // Word segmentation lowers through ICU (scr_intl.c). Sentence
+    // segmentation does not: JavaScript dependencies may construct sentence
+    // segmenters they use only on some paths, so the construction compiles
+    // and their segment() throws SC2020; TypeScript sources keep the
+    // build-time refusal.
     const granularities = isJsSourceFile(ts.getSourceFileOfNode(expr))
       ? ["grapheme", "word", "sentence"]
-      : ["grapheme"];
+      : ["grapheme", "word"];
     const options = args[1];
     let granularity = "grapheme";
     if (options && !undefinedArg(options)) {
@@ -10296,7 +10304,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         lowerer.noLowering(
           "Intl.Segmenter options",
           options,
-          'the native segmenter supports default options and { granularity: "grapheme" }; word and sentence segmentation remain unsupported',
+          'the native segmenter supports default options, { granularity: "grapheme" } and { granularity: "word" }; sentence segmentation remains unsupported',
         );
       for (const property of options.properties.nodes) {
         if (
@@ -10309,7 +10317,7 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
           lowerer.noLowering(
             "Intl.Segmenter options",
             options,
-            'the native segmenter supports default options and { granularity: "grapheme" }; word and sentence segmentation remain unsupported',
+            'the native segmenter supports default options, { granularity: "grapheme" } and { granularity: "word" }; sentence segmentation remains unsupported',
           );
         }
         granularity = property.initializer.text;
@@ -10324,16 +10332,32 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         loc: locOf(arg),
       };
     });
+    // Grapheme segmentation is the engine-free table-driven segmenter
+    // (scr_grapheme.c). NOTE: once ICU is established everywhere, this fast
+    // path is deleted in favor of ICU's character iterator (design I4).
     let result: IrExpr = { kind: "libCall", fn: "intl.segmenterNew", args: [], type: DYN, loc };
-    // A word or sentence segmenter carries its segment() refusal, which
-    // coverage lists as deferred to runtime.
-    if (granularity !== "grapheme") {
+    if (granularity === "word") {
+      // ICU's word iterator at the requested locale; a literal language tag
+      // is the locale, and the empty string means the default locale (what
+      // Node negotiates when the argument is absent or undefined).
+      const tag = args[0] !== undefined && ts.isStringLiteralLike(args[0]) ? args[0].text : "";
+      result = {
+        kind: "libCall",
+        fn: "icu.segmenterWord",
+        args: [strLit(tag, loc)],
+        type: DYN,
+        loc,
+      };
+    }
+    // A sentence segmenter carries its segment() refusal, which coverage
+    // lists as deferred to runtime.
+    if (granularity === "sentence") {
       const surface = `Intl.Segmenter segmentation with granularity '${granularity}'`;
       lowerer.runtimeFences.push(
         noLoweringDiag(
           surface,
           loc,
-          "only grapheme segmenters segment; word and sentence segmenters construct",
+          "only grapheme and word segmenters segment; sentence segmenters construct",
         ),
       );
       const line = ts.getLineAndCharacterOfPosition(ts.getSourceFileOfNode(expr), loc.start).line;

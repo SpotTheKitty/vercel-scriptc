@@ -1184,6 +1184,10 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     case "str":
     case "regexp":
     case "intl":
+    // ICU-backed Intl (scr_intl.c): ordinary libCalls whose C symbols the
+    // runtime provides — the same generic emission the engine-free intl
+    // forms use.
+    case "icu":
     case "sym":
     case "perf":
     case "number":

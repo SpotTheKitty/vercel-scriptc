@@ -5472,24 +5472,54 @@ function lowerPrimitiveProtoCall(
   }
   // Number.prototype.toLocaleString("en-US") — the spec makes it
   // NumberFormat(locale).format(this), so the en-US embedded formatter
-  // answers exactly. The unlowered forms fence by NAME: no locale (the
-  // host environment's default, which a compiled binary cannot carry),
-  // other locales (ICU data the binary does not embed), options bags.
+  // answers exactly. Without a locale (or with `undefined`) the DEFAULT
+  // locale answers, over the ICU data scr_intl.c loads; other locales and
+  // options bags stay fenced.
   if (name === "toLocaleString" && recvKind === "f64") {
-    if (call.arguments.nodes.length === 0) {
-      lowerer.noLowering(
-        "Number.prototype.toLocaleString without a locale",
-        call,
-        "the default locale is the host environment's, which a compiled binary cannot carry — " +
-          'pass it explicitly: x.toLocaleString("en-US")',
-      );
+    // Exactly undefined (or void): what the absent form means. A union that
+    // merely includes undefined may hold a locale at run time and falls
+    // through to the refusal below.
+    const isUndefined = (node: ts.Expression): boolean => {
+      const flags = lowerer.typeOf(node).flags;
+      return flags === ts.TypeFlags.Undefined || flags === ts.TypeFlags.Void;
+    };
+    const defaultLocale =
+      call.arguments.nodes.length === 0 ||
+      (call.arguments.nodes.length === 1 &&
+        !ts.isSpreadElement(call.arguments.nodes[0]!) &&
+        isUndefined(call.arguments.nodes[0]!));
+    if (defaultLocale) {
+      const operand = lowerer.lowerExpr(recv);
+      if (operand.type.kind !== "f64") return null;
+      const stmts: IrStmt[] = [];
+      if (call.arguments.nodes.length === 1) {
+        // An explicit undefined may be any expression that evaluates to it
+        // (a call, a variable), so it still runs — in argument order, before
+        // the formatting. Its unit value has no standalone representation,
+        // so it is coerced into the dynamic slot every argument occupies.
+        const arg = call.arguments.nodes[0]!;
+        const value = lowerer.lowerExpr(arg);
+        stmts.push({
+          kind: "exprStmt",
+          expr: value.type.kind === "void" ? value : lowerer.coerceInto(arg, value, DYN),
+          loc,
+        });
+      }
+      const call_: IrExpr = {
+        kind: "libCall",
+        fn: "icu.numFormatDefault",
+        args: [operand],
+        type: STRING,
+        loc,
+      };
+      return stmts.length ? { kind: "seqExpr", stmts, result: call_, type: STRING, loc } : call_;
     }
     if (call.arguments.nodes.length > 1) {
       lowerer.noLowering(
         "Number.prototype.toLocaleString with an options bag",
         call,
-        "the embedded data covers DEFAULT options only (decimal notation, up to 3 fraction " +
-          'digits, grouping) — x.toLocaleString("en-US")',
+        "what lowers is the DEFAULT options shape (decimal notation, up to 3 fraction digits, " +
+          "grouping) at the default locale or at en-US — omit the options bag",
       );
     }
     const locNode = call.arguments.nodes[0]!;
@@ -5503,8 +5533,8 @@ function lowerPrimitiveProtoCall(
           ? `Number.prototype.toLocaleString at locale "${locNode.text}"`
           : "Number.prototype.toLocaleString with a non-literal locale",
         locNode,
-        '"en-US" (Node\'s default-build locale) is the one locale whose data the runtime embeds — ' +
-          "everything else is ICU data the binary does not carry",
+        "what lowers is the default locale (no argument) and the composed en-US form — " +
+          "other locales are ICU data the binary does not negotiate yet",
       );
     }
     const operand = lowerer.lowerExpr(recv);

@@ -11295,9 +11295,11 @@ export class Lowerer {
     // pointed reason the identifier/constructor chokepoints teach.
     if (stdlibNominal) {
       const intlHint =
-        "Intl formatter values have no representation — the COMPOSED en-US forms lower: " +
-        'new Intl.NumberFormat("en-US").format(x) and x.toLocaleString("en-US") with default options; ' +
-        "the rest is ICU locale data the binary does not carry";
+        "Intl formatter values have no representation — the COMPOSED forms lower: " +
+        'new Intl.NumberFormat("en-US").format(x), x.toLocaleString("en-US") and ' +
+        "x.toLocaleString() with default options, d.toLocaleString(), d.toLocaleTimeString(), " +
+        "and Intl.Segmenter with grapheme or word granularity; the formatter objects " +
+        "themselves (locale negotiation, resolvedOptions, options bags) remain unsupported";
       const typeHints: Record<string, string | undefined> = {
         ArrayBuffer:
           "fixed ArrayBuffer storage and typed-array views are supported; resizable and detached storage are not modeled",

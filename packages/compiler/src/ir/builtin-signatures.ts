@@ -1000,6 +1000,18 @@ function buildLibFnSignatures() {
      * grouping every three integer digits, "∞"/"NaN" texts, and "-0" for
      * negative inputs rounding to zero. Result +1; never throws. */
     "intl.numFormatEnUs": { argTypes: [F64], result: STRING },
+    /** `x.toLocaleString()` at the default locale: the same ICU number
+     * engine V8 uses, over the full ICU data (scr_intl.c). Result +1. */
+    "icu.numFormatDefault": { argTypes: [F64], result: STRING },
+    /** `process.config.variables.v8_enable_i18n_support`: the number 1, as
+     * Node (which bundles ICU) answers. Reading it selects the `icu`
+     * runtime feature, so the binary that reports ICU is the binary that
+     * carries it (scr_intl.c). */
+    "icu.i18nSupport": { argTypes: [], result: F64 },
+    /** `d.toLocaleString()` / `d.toLocaleTimeString()` at the default
+     * locale over `d`'s time value (scr_intl.c). Result +1. */
+    "icu.dateLocaleString": { argTypes: [DATE_T], result: STRING },
+    "icu.dateLocaleTimeString": { argTypes: [DATE_T], result: STRING },
     /** ES Symbol values (scr_symbol.c — link-gated by moduleUsesSymbol).
      * sym.new: `Symbol(desc)` — a fresh runtime-unique identity (+1) whose
      * one arg is the description string (borrowed); sym.newAnon is the
@@ -3939,6 +3951,13 @@ function buildLibFnSignatures() {
     "ffi.memoryModule": { argTypes: [DYN], result: DYN },
     "intl.segmenterNew": { argTypes: [], result: DYN },
     "intl.segmenterRefusing": { argTypes: [STRING], result: DYN },
+    /** `new Intl.Segmenter(locale?, { granularity: "word" })`: ICU's UAX
+     * #29 word iterator (scr_intl.c over ICU), which the
+     * table-driven grapheme segmenter above cannot express. The argument is
+     * the negotiated language tag; the empty string selects the default
+     * locale (ICU's, resolved from the host environment like V8's). +1
+     * handle. */
+    "icu.segmenterWord": { argTypes: [STRING], result: DYN },
     "arrayBuffer.is": { argTypes: [DYN], result: BOOL },
     "arrayBuffer.isView": { argTypes: [DYN], result: BOOL },
     "arrayBuffer.byteLengthGetter": { argTypes: [], result: F64 },

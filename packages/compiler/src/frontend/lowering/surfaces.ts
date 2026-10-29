@@ -3417,11 +3417,13 @@ export function stdlibMemberFence(lowerer: Lowerer, access: ts.PropertyAccessExp
     member === "toLocaleUpperCase"
   ) {
     hint =
-      "locale- and ICU-backed behavior lives outside the static runtime (the localeCompare " +
-      "stance: code-unit order, no collation/locale data) — what lowers: the composed " +
+      "collation and locale negotiation stay outside the static runtime (the localeCompare " +
+      "stance: code-unit order, no collation) — what lowers: the composed " +
       'new Intl.NumberFormat("en-US").format(x) and x.toLocaleString("en-US") with default ' +
-      "options, plus default Unicode grapheme segmentation with Intl.Segmenter; locale " +
-      "negotiation, word/sentence segmentation, and resolvedOptions remain unsupported";
+      "options, their default-locale forms (x.toLocaleString(), d.toLocaleString(), " +
+      "d.toLocaleTimeString()), and Intl.Segmenter with grapheme or word granularity; " +
+      "sentence segmentation, resolvedOptions, and the remaining Intl constructors remain " +
+      "unsupported";
   } else if (container === "Object" && member === "assign") {
     hint =
       "spread instead: { ...a, ...b } builds the merged record; what lowers: the empty-target " +
