@@ -49,6 +49,7 @@ import { expandoWritableTarget } from "../lower-expando.js";
 import { nsWritableTarget } from "../lower-namespaces.js";
 import { arrayNumberRead, arrayValueRead, arrayValueStore } from "../array-values.js";
 import { isSafeToRepeat } from "./evaluation-safety.js";
+import { partialFieldWriteError } from "../partial-assertions.js";
 import { errorPropertyWrite } from "../error-methods.js";
 import type { CompoundOp } from "../surfaces.js";
 import { tryLowerExpression } from "./try-lower-expression.js";
@@ -888,24 +889,58 @@ export function fieldSetStmt(
       loc,
     };
   }
-  return target.container === "class"
-    ? {
-        kind: "fieldSet",
-        obj: target.obj,
-        className: target.className,
-        field: target.field,
-        value,
-        ...(isStrictCode(blame) ? {} : { sloppy: true as const }),
-        loc,
-      }
-    : {
-        kind: "recordSet",
-        obj: target.obj,
-        shapeId: target.shapeId,
-        field: target.field,
-        value,
-        loc,
-      };
+  if (target.container === "class")
+    return {
+      kind: "fieldSet",
+      obj: target.obj,
+      className: target.className,
+      field: target.field,
+      value,
+      ...(isStrictCode(blame) ? {} : { sloppy: true as const }),
+      loc,
+    };
+  // A field some partial record assertion leaves unwritten (a partial
+  // record view, partial-assertions.ts): a view cannot grow a slot the
+  // asserted literal never wrote, so the write throws the catchable
+  // TypeError (Node would add the property — a documented divergence).
+  const refused = partialFieldWriteError(lowerer, target.shapeId, target.field, loc);
+  if (refused !== null) {
+    const obj = target.obj;
+    const stable = isSafeToRepeat(obj)
+      ? null
+      : lowerer.declareHiddenLocal("%partialWrite", obj.type);
+    const ref = stable ? varRef(stable.id, obj.type, loc) : obj;
+    return {
+      kind: "block",
+      body: [
+        ...(stable ? [{ kind: "varDecl" as const, localId: stable.id, init: obj, loc }] : []),
+        {
+          kind: "if",
+          cond: {
+            kind: "recordHas",
+            obj: ref,
+            shapeId: target.shapeId,
+            field: target.field,
+            type: BOOL,
+            loc,
+          },
+          then: [],
+          else_: [{ kind: "exprStmt", expr: refused, loc }],
+          loc,
+        },
+        { kind: "recordSet", obj: ref, shapeId: target.shapeId, field: target.field, value, loc },
+      ],
+      loc,
+    };
+  }
+  return {
+    kind: "recordSet",
+    obj: target.obj,
+    shapeId: target.shapeId,
+    field: target.field,
+    value,
+    loc,
+  };
 }
 
 export function lowerFieldCompoundValue(
