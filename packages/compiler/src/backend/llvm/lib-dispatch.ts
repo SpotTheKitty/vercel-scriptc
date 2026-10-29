@@ -214,6 +214,9 @@ export function emitIoLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue
 
 export function emitGenericLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
   const B = host.B;
+  // The generic emitter registrations queue the maxListeners leak warning
+  // for the next tick like emitter.on (lib-process.ts).
+  if (e.fn === "emitter.onFlex" || e.fn === "emitter.onAny") host.usesTimers = true;
   if (host.coroAwait && e.fn === "async.hop") {
     host.emitCoroAwait(null);
     return { name: "", type: e.type };
@@ -1170,6 +1173,7 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     case "dir":
     case "watcher":
     case "stats":
+    case "bigstats":
     case "zlib":
     case "atomics":
       return host.emitFilesystemLibCall(e);

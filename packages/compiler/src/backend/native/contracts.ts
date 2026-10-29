@@ -199,6 +199,9 @@ export interface CcOptions {
    * Symbol-free binaries keep their exact link line. */
   symbol?: boolean;
   bigint?: boolean;
+  /** BigIntStats member reads: compiles scr_stats_bigint.c. Every other
+   * bigint program keeps its exact link line and size. */
+  bigstats?: boolean;
   /** Records URLSearchParams use in the build identity. Its runtime unit is
    * part of the base sources because checked URL handles expose searchParams. */
   searchParams?: boolean;
@@ -266,6 +269,11 @@ export interface CcOptions {
    * scr_watch.c into the binary — the net gating precedent, so watch-free
    * binaries keep their exact link line. */
   watch?: boolean;
+  /** The program uses fs.watchFile or fs.unwatchFile (moduleUsesFsWatchFile
+   * on the IR): compiles scr_watch_file.c into the binary — its own gated
+   * unit under the same precedent, so polling-free binaries keep their
+   * exact link line. */
+  watchFile?: boolean;
   /** The executable manifest has a format-5 foreign callback descriptor:
    * compiles the MPSC queue/self-pipe unit. Other FFI and non-FFI binaries
    * keep their existing runtime size class. */

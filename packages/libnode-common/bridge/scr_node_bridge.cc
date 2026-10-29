@@ -195,6 +195,26 @@ bool TakeFunction(Isolate *isolate, Local<Context> context, Local<Object> from, 
   return true;
 }
 
+// OpenSSL registers OPENSSL_cleanup with atexit on its first
+// initialization. In a scriptc program that loaded Node, threads Node owns
+// can still be inside OpenSSL when the process's exit handlers run: the
+// threads node:tls starts to parse the root certificates (long with
+// NODE_USE_SYSTEM_CA=1; RunLoop waits for them, but an exit that does not
+// end the loop does not) are joined only by Node's per-process teardown,
+// which cannot run here (see Stop). OPENSSL_cleanup
+// freed OpenSSL's locks and method stores under them (SIGSEGV/SIGABRT at
+// exit in up to half the runs, NI-7c). Initializing OpenSSL first with
+// OPENSSL_INIT_NO_ATEXIT keeps that handler from being registered: OpenSSL's
+// process-lifetime state is left to process exit, like the rest of Node's
+// per-process state. Packs whose libnode does not export the symbol keep
+// OpenSSL's default.
+void KeepOpenSSLAtExit() {
+  using InitCrypto = int (*)(uint64_t, const void *);
+  constexpr uint64_t kNoAtExit = 0x00080000L; // OPENSSL_INIT_NO_ATEXIT (OpenSSL 3)
+  auto init = reinterpret_cast<InitCrypto>(dlsym(RTLD_DEFAULT, "OPENSSL_init_crypto"));
+  if (init != nullptr) init(kNoAtExit, nullptr);
+}
+
 uint32_t ExportIdOf(Isolate *isolate, Local<Context> context, Local<Value> v);
 
 // isExport(value): whether a value is the representative of a native value
@@ -214,6 +234,7 @@ char *Start(const ScrNodeBridgeHost *host, const char *bootstrap, const char *ar
   Dl_info info;
   if (dladdr(reinterpret_cast<void *>(&napi_create_function), &info) && info.dli_fname)
     dlopen(info.dli_fname, RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
+  KeepOpenSSLAtExit();
   std::vector<std::string> args = {argv0};
   // The program is not a node process: NODE_OPTIONS from its environment
   // does not apply, and Node leaves the process's resource limits and code
@@ -433,10 +454,18 @@ void OnCap(uv_timer_t *) {
   SyncIo(SCR_NODE_IO_JOBS);
 }
 
-void OnPrepare(uv_prepare_t *) { SyncIo(SCR_NODE_IO_PREPARE); }
+// Before each poll phase, while the runtime has live work: one pass over
+// its dispatch stations, as the runtime's own loop makes one per turn.
+// Some of their work no fd announces (a server's deferred 'listening' or
+// 'close', a socket's queued writes), so waiting for an fd could block the
+// loop forever with that work pending.
+void OnPrepare(uv_prepare_t *handle) {
+  if (uv_has_ref(reinterpret_cast<uv_handle_t *>(handle))) Dispatch();
+  SyncIo(SCR_NODE_IO_PREPARE);
+}
 
 // The end of an iteration: the next one may dispatch again (from its idle
-// phase when work is ready, else from its poll phase).
+// or prepare phase, else from its poll phase).
 void OnCheck(uv_check_t *) {
   g_dispatched = false;
   SyncIo(SCR_NODE_IO_CHECK);
@@ -616,6 +645,29 @@ void Checkpoint(int microtasks_first) {
   node::CallbackScope scope(e.isolate, Object::New(e.isolate), node::async_context{0, 0});
 }
 
+// Loading node:tls starts threads that parse the root certificates into
+// function-local statics (bundled, NODE_EXTRA_CA_CERTS, and the system
+// store with NODE_USE_SYSTEM_CA=1, which takes long). Only Node's
+// CleanupCachedRootCertificates joins them. Once exit() begins, the
+// statics' destructors (registered when the threads initialize them, so
+// they run before any handler the program registered earlier) free the
+// vectors under a thread that is still parsing, and OpenSSL's state goes
+// away under it: heap corruption and SIGSEGV/SIGABRT at exit (NI-7c). So
+// when the loop is done, before the program returns, the bridge waits for
+// them: building a root store reads the same statics under the same
+// conditions, and initializing a static blocks until the thread that runs
+// it is done. A store built earlier means the statics were initialized
+// then. Programs that never loaded node:tls do nothing here.
+void AwaitCertificateLoading(Enter &e) {
+  TryCatch try_catch(e.isolate);
+  static const char kSource[] =
+      "(() => { try { if (process.moduleLoadList.includes('NativeModule tls'))"
+      " process.getBuiltinModule('node:tls').createSecureContext(); } catch {} })()";
+  Local<v8::Script> script;
+  if (v8::Script::Compile(e.context, Utf8(e.isolate, kSource)).ToLocal(&script))
+    (void)script->Run(e.context);
+}
+
 int RunLoop(int continue_turn) {
   Enter e;
   // The rest of the turn the switch interrupted: libuv's UV_RUN_ONCE skips
@@ -624,7 +676,9 @@ int RunLoop(int continue_turn) {
     uv_run(g_setup->event_loop(), UV_RUN_ONCE);
     g_platform->DrainTasks(e.isolate);
   }
-  return node::SpinEventLoop(g_setup->env()).FromMaybe(0);
+  int code = node::SpinEventLoop(g_setup->env()).FromMaybe(0);
+  AwaitCertificateLoading(e);
+  return code;
 }
 
 // An island listener of a process event: through MakeCallback, so a throw
@@ -653,9 +707,16 @@ void Stop() {
   delete g_locker;
   g_locker = nullptr;
   g_setup.reset();
+  // As Node's own exit does (DefaultProcessExitHandlerInternal): join
+  // libuv's thread pool, whose work (pbkdf2, key generation, ...) may be
+  // inside OpenSSL, before the process's exit handlers clean OpenSSL up.
+  uv_library_shutdown();
   v8::V8::Dispose();
   v8::V8::DisposePlatform();
-  node::TearDownOncePerProcess();
+  // Node's per-process teardown is left to process exit: Stop runs from an
+  // exit handler registered when Node started, after the destructors of
+  // the certificate statics (registered later) already ran, so its
+  // certificate cleanup would free them a second time.
 }
 
 
@@ -1441,6 +1502,11 @@ Local<Value> ExportValue(Isolate *isolate, Local<Context> context, const ScrNode
   } else {
     obj = ExportTemplate(isolate)->NewInstance(context).ToLocalChecked();
     obj->SetInternalField(0, data);
+    // A template instance inherits from its implicit constructor's own
+    // prototype object; a native plain object is a plain object to island
+    // code (`Object.getPrototypeOf(o) === Object.prototype`, as jose's
+    // isObject checks), so it inherits Object.prototype directly.
+    obj->SetPrototypeV2(context, v8::Object::New(isolate)->GetPrototypeV2()).FromMaybe(false);
   }
   if (!obj->IsProxy()) obj->SetPrivate(context, ExportKey(isolate), data).Check();
   Global<Object> &slot = g_exports[id];
@@ -1608,6 +1674,41 @@ Local<Value> ToV8(Isolate *isolate, Local<Context> context, const ScrNodeValue *
   }
 }
 
+// Node's arrow header for an exception's throw site, recorded once on the
+// error object (as Node decorates an error the first time it is thrown):
+// "<resource>:<line>\n<source line>\n<caret>", the caret under the
+// message's columns with tabs kept. Printed by the runtime when the error
+// ends the program uncaught (ErrorInfo's `arrow`).
+Local<v8::Private> ArrowKey(Isolate *isolate) {
+  return v8::Private::ForApi(isolate, Utf8(isolate, "scriptc.node-island.arrow"));
+}
+
+void RecordArrow(Isolate *isolate, Local<Context> context, const TryCatch &try_catch,
+                 Local<Value> exception) {
+  if (!exception->IsObject()) return;
+  Local<Object> error = exception.As<Object>();
+  Local<v8::Private> key = ArrowKey(isolate);
+  if (error->HasPrivate(context, key).FromMaybe(true)) return;
+  // Node decorates from the error's own message (its construction site,
+  // as Exception::CreateMessage answers for an Error with a stack), not
+  // from where the throw left the call.
+  Local<v8::Message> message = v8::Exception::CreateMessage(isolate, exception);
+  if (message.IsEmpty()) message = try_catch.Message();
+  if (message.IsEmpty()) return;
+  Local<String> source;
+  if (!message->GetSourceLine(context).ToLocal(&source)) return;
+  std::string line = *String::Utf8Value(isolate, source);
+  std::string resource = *String::Utf8Value(isolate, message->GetScriptResourceName());
+  int linenum = message->GetLineNumber(context).FromMaybe(0);
+  int start = message->GetStartColumn(context).FromMaybe(0);
+  int end = message->GetEndColumn(context).FromMaybe(start + 1);
+  std::string arrow = resource + ":" + std::to_string(linenum) + "\n" + line + "\n";
+  for (int i = 0; i < start; i++)
+    arrow += (i < static_cast<int>(line.size()) && line[i] == '\t') ? '\t' : ' ';
+  for (int i = start; i < end || i == start; i++) arrow += '^';
+  (void)error->SetPrivate(context, key, Utf8(isolate, arrow.data(), arrow.size()));
+}
+
 // One entry from the runtime: the isolate scope, V8's stack limit for the
 // caller's stack, and the out-value scratch (reset by outermost entries).
 struct Op {
@@ -1625,6 +1726,7 @@ struct Op {
     }
     if (try_catch.HasCaught() && !try_catch.HasTerminated()) {
       Local<Value> exception = try_catch.Exception();
+      RecordArrow(e.isolate, e.context, try_catch, exception);
       try_catch.Reset();
       FromV8(e.isolate, e.context, exception, out);
     } else {
@@ -1886,6 +1988,9 @@ void ErrorInfo(uint32_t h, ScrNodeErrorInfo *out) {
   read("message", &out->message, &out->message_len, false);
   read("stack", &out->stack, &out->stack_len, true);
   read("code", &out->code, &out->code_len, true);
+  Local<Value> arrow;
+  if (error->GetPrivate(op.e.context, ArrowKey(op.e.isolate)).ToLocal(&arrow) && arrow->IsString())
+    out->arrow = Scratch(Wtf8(op.e.isolate, arrow.As<String>()), &out->arrow_len);
 }
 
 void DropHandle(uint32_t h) {

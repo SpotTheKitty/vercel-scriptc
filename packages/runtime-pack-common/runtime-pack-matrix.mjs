@@ -62,13 +62,20 @@ export const BASE_RUNTIME_SOURCES = [
 export const OPTIONAL_RUNTIME_SOURCES = [
   ["scr_copying.c", "copying"],
   ["scr_file_handle.c", "fileHandle"],
+  // BigIntStats member reads (`statSync(p, { bigint: true })` members). The
+  // bigstats gate is narrower than bigint, which every bigint value turns on.
+  ["scr_stats_bigint.c", "bigstats"],
   ["scr_regex.c", "regex"],
+  // path.win32.relative uses the regex unit's Unicode case mapping.
+  ["scr_path_win32_relative.c", "regex"],
   ["scr_glob.c", "regex"],
   ["scr_idna.c", "regex"],
   ["scr_assert.c", any("assert", "regex", "symbol")],
   ["scr_inspect.c", "inspect"],
   ["scr_console_native.c", "inspect"],
-  ["scr_dyn_invoke.c", any("dynInvoke", "nativeFetch")],
+  // Island libCalls on native values typed by island declarations invoke
+  // through the checked-dynamic path (scr_node_island_handle.c).
+  ["scr_dyn_invoke.c", any("dynInvoke", "nativeFetch", "nodeIsland")],
   // Buffer.prototype methods called on checked-dynamic values.
   ["scr_bytes_dyn.c", all("dynBuffer", "dynInvoke")],
   // Builtin functions read as values in JavaScript dependencies.
@@ -182,6 +189,7 @@ export const OPTIONAL_RUNTIME_SOURCES = [
   // TextEncoder and TextDecoder records boxed as untyped values.
   ["scr_text_codec_dyn.c", "textCodecDyn"],
   ["scr_watch.c", "watch"],
+  ["scr_watch_file.c", "watchFile"],
   ["scr_ffi_queue.c", "foreignFfi"],
   ["scr_test.c", "nodeTest"],
   ["scr_tls_ca.c", "tlsCaEffective"],
@@ -253,8 +261,13 @@ export function variantsFor(source) {
       defines: ["SCR_JS_TIER", "SCR_HANDLE_CLASSES", "SCR_NODE_ISLANDS"],
     });
   }
-  // util.inspect and instanceof of Node island handles.
-  if (source === "scr_inspect.c" || source === "scr_dyn_builtin_class.c") {
+  // util.inspect and instanceof of Node island handles; Node's report for
+  // an uncaught island error.
+  if (
+    source === "scr_inspect.c" ||
+    source === "scr_dyn_builtin_class.c" ||
+    source === "scr_exception.c"
+  ) {
     variants.push({
       id: "node-island",
       when: { nodeIsland: true },
@@ -266,6 +279,17 @@ export function variantsFor(source) {
       id: "text-decoder-legacy",
       when: { textDecoderLegacy: true },
       defines: ["SCR_TEXT_DECODER_LEGACY"],
+    });
+  }
+  // fs.watchFile's poll needs a path stat that reports the errno (its failed
+  // poll IS a reportable event). The Stats snapshot is private to scr_lib.c,
+  // so the two entry points live in a build of that unit only programs that
+  // poll link; every other program keeps the default object, byte for byte.
+  if (source === "scr_lib.c") {
+    variants.push({
+      id: "fs-watch-file",
+      when: { watchFile: true },
+      defines: ["SCR_FS_WATCH_FILE"],
     });
   }
   // Programs that assign process.emitWarning link the replacement-aware
