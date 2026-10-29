@@ -177,6 +177,7 @@ export const OPTIONAL_RUNTIME_SOURCES = [
   // TextEncoder and TextDecoder records boxed as untyped values.
   ["scr_text_codec_dyn.c", "textCodecDyn"],
   ["scr_watch.c", "watch"],
+  ["scr_watch_file.c", "watchFile"],
   ["scr_ffi_queue.c", "foreignFfi"],
   ["scr_test.c", "nodeTest"],
   ["scr_tls_ca.c", "tlsCaEffective"],

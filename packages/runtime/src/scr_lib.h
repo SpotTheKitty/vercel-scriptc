@@ -479,6 +479,11 @@ double scr_stats_ctime(ScrStats *s);
 double scr_stats_birthtime(ScrStats *s);
 /* fstat without throwing: +1, or NULL with *error set to the errno. */
 ScrStats *scr_stats_of_fd(int fd, int *error);
+/* stat(2) following symlinks without throwing (the fs.watchFile poll):
+ * +1, or NULL with *error set to the errno. */
+ScrStats *scr_stats_of_path(ScrStr *path, int *error);
+/* The all-zero snapshot a failed poll reports (Node's kZeroStats). +1. */
+ScrStats *scr_stats_zero(void);
 /* Node's Stats (or BigIntStats) object for the snapshot: own fields in the
  * binding's order, lazy Date accessors and the type tests on the
  * prototypes. Borrows s; +1. */

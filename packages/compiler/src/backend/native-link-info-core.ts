@@ -116,6 +116,8 @@ export interface NativeLinkFeatures {
    * scr_text_codec_dyn.c. */
   textCodecDyn: boolean;
   watch: boolean;
+  /** fs.watchFile/fs.unwatchFile: scr_watch_file.c. */
+  watchFile: boolean;
   foreignFfi: boolean;
   nodeTest: boolean;
   tls: boolean;

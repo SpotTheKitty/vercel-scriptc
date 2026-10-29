@@ -5557,7 +5557,7 @@ static bool scr_stats_link_target(HANDLE h, DWORD tag, double *size_out, ScrStr 
   return true;
 }
 
-static ScrStats *scr_stats_of_path(const ScrStr *path, const char *op,
+static ScrStats *scr_stats_win_handle_stats(const ScrStr *path, const char *op,
                                    bool no_follow) {
   WCHAR *wide = scr_fs_win_wide(path);
   if (!wide) return scr_stats_crt_fallback(path, op);
@@ -5603,7 +5603,7 @@ static ScrStats *scr_stats_of_path(const ScrStr *path, const char *op,
       /* Reparse points are a general interception mechanism. Node/libuv
        * follows non-link tags even for lstat, so reopen the resolved target. */
       CloseHandle(h);
-      return scr_stats_of_path(path, op, false);
+      return scr_stats_win_handle_stats(path, op, false);
     }
     if (!scr_stats_link_target(h, tagged.ReparseTag, &link_size, NULL)) {
       /* A mount-point tag may name a mounted volume rather than a junction.
@@ -5611,7 +5611,7 @@ static ScrStats *scr_stats_of_path(const ScrStr *path, const char *op,
        * ordinary reparse points and retries with the final component
        * followed. Do not classify from the tag alone. */
       CloseHandle(h);
-      return scr_stats_of_path(path, op, false);
+      return scr_stats_win_handle_stats(path, op, false);
     }
     is_link = true;
   }
@@ -6054,7 +6054,7 @@ ScrBytes *scr_fs_readlink_bytes(ScrStr *path) {
 ScrStats *scr_fs_stat(ScrStr *path) {
   if (!scr_fs_path_ok(path, "path")) return NULL;
 #ifdef _WIN32
-  return scr_stats_of_path(path, "stat", false);
+  return scr_stats_win_handle_stats(path, "stat", false);
 #else
   int error = 0;
   ScrStats *s = scr_stats_posix(path->data, -1, false, &error); /* follows symlinks */
@@ -6066,7 +6066,7 @@ ScrStats *scr_fs_stat(ScrStr *path) {
 ScrStats *scr_fs_lstat(ScrStr *path) {
   if (!scr_fs_path_ok(path, "path")) return NULL;
 #ifdef _WIN32
-  return scr_stats_of_path(path, "lstat", true);
+  return scr_stats_win_handle_stats(path, "lstat", true);
 #else
   int error = 0;
   ScrStats *s = scr_stats_posix(path->data, -1, true, &error); /* no follow */
@@ -6107,6 +6107,33 @@ ScrStats *scr_fs_fstat(double fd) {
   if (!s) scr_fs_throw_nopath(error, "fstat");
   return s;
 }
+
+/* fs.watchFile's poll (scr_watch_file.c calls this): stat(2) following
+ * symlinks, libuv's uv_fs_stat — NULL with *error = errno on failure,
+ * never throwing, because a failed poll IS a reportable event. +1. */
+ScrStats *scr_stats_of_path(ScrStr *path, int *error) {
+  if (!scr_fs_path_ok(path, "path")) {
+    *error = EINVAL;
+    return NULL;
+  }
+#ifdef _WIN32
+  /* The CRT snapshot states what the probe can see without opening a
+   * handle: the poll needs the errno, not Win32's extended attributes. */
+  struct stat st;
+  if (stat(path->data, &st) != 0) {
+    *error = errno;
+    return NULL;
+  }
+  return scr_stats_of_crt(&st);
+#else
+  return scr_stats_posix(path->data, -1, false, error);
+#endif
+}
+
+/* The all-zero Stats a failed poll reports (Node's kZeroStats): every
+ * field 0, so isFile()/isDirectory() and the size/date reads all answer
+ * zero/false. +1. */
+ScrStats *scr_stats_zero(void) { return scr_stats_new(); }
 
 /* ── Stats objects ───────────────────────────────────────────────────
  * Node's Stats and BigIntStats over a snapshot. The integers and the *Ms

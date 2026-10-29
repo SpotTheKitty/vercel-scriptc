@@ -549,6 +549,40 @@ export function emitFilesystemLibCall(host: LlvmEmitterContext, e: LibCallExpr):
     B.line(`call void @scr_watcher_close(ptr ${w.name})`);
     return { name: "", type: e.type };
   }
+  if (e.fn === "fs.watchFile") {
+    // (path, interval, persistent, listener) — the listener MOVES into
+    // the poller's registry and the adapter is runtime-provided per
+    // listener shape (zero, one or two Stats parameters). The poller
+    // re-arms a timer every interval, so this is a timer program.
+    host.usesTimers = true;
+    const cbT = e.args[3]!.type;
+    if (cbT.kind !== "func")
+      throw new InternalCompilerError("llvm emitter bug: fs.watchFile listener not a func");
+    const path = host.emitExpr(e.args[0]!);
+    const interval = host.emitExpr(e.args[1]!);
+    const persistent = host.emitExpr(e.args[2]!);
+    const cb = host.emitExpr(e.args[3]!);
+    host.toHeap(cb);
+    const adapter = `scr_watch_file_thunk${cbT.params.length}`;
+    host.declare(`declare void @${adapter}(ptr, ptr, ptr)`);
+    host.declare(`declare void @scr_fs_watch_file(ptr, double, i1 zeroext, ptr, ptr)`);
+    B.line(
+      `call void @scr_fs_watch_file(ptr ${path.name}, double ${interval.name}, i1 ${persistent.name}, ptr ${cb.name}, ptr @${adapter})`,
+    );
+    return { name: "", type: e.type };
+  }
+  if (e.fn === "fs.unwatchFile") {
+    // Removal is by closure identity: the listener stays borrowed
+    // (never heap-moved), exactly like watcher.off's; an absent one is
+    // the NULL that removes every listener on the path.
+    const path = host.emitExpr(e.args[0]!);
+    const cb = e.args[1] === undefined ? null : host.emitExpr(e.args[1]!);
+    host.declare(`declare void @scr_fs_unwatch_file(ptr, ptr)`);
+    B.line(
+      `call void @scr_fs_unwatch_file(ptr ${path.name}, ptr ${cb === null ? "null" : cb.name})`,
+    );
+    return { name: "", type: e.type };
+  }
   if (e.fn === "fs.globTypesSync" || e.fn === "fsp.globTypes") {
     // Dirent rows from one glob snapshot (scr_glob.c): mode 1 is the
     // globSync form, 3 the fs/promises form with resolved parent paths.

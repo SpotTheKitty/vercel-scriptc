@@ -595,6 +595,28 @@ declare module "node:fs" {
     options: WatchOptions,
     listener?: WatchListener<string>,
   ): FSWatcher;
+  /* fs.watchFile — stat polling (scr_watch_file.c, libuv's uv_fs_poll
+   * shape): the listener runs with (current, previous) Stats when a poll
+   * sees a difference, the first poll only records the baseline, and a
+   * path that cannot be stat'd polls as all-zero Stats. One poller per
+   * resolved path is shared by every listener on it. interval defaults to
+   * 5007 ms, persistent defaults to true; bigint: true (BigIntStats) has
+   * no lowering. The call is a statement: Node's StatWatcher has no
+   * lowering. */
+  export interface StatWatcher {}
+  export function watchFile(
+    filename: string,
+    options: { interval?: number; persistent?: boolean; bigint?: false },
+    listener: (current: Stats, previous: Stats) => void,
+  ): StatWatcher;
+  export function watchFile(
+    filename: string,
+    listener: (current: Stats, previous: Stats) => void,
+  ): StatWatcher;
+  export function unwatchFile(
+    filename: string,
+    listener?: (current: Stats, previous: Stats) => void,
+  ): void;
   /* fs.promises IS the fs/promises module (Node's rule) — the namespace-
    * import form `fs.promises.readFile(...)` lowers through the same
    * fs/promises table as `import { readFile } from "node:fs/promises"`. */

@@ -443,6 +443,13 @@ export const FS_WATCH_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
   "signal",
 ]);
 
+/** fs.watchFile's documented option keys. */
+export const FS_WATCH_FILE_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
+  "interval",
+  "persistent",
+  "bigint",
+]);
+
 /** fs.readdirSync's documented option keys. */
 export const FS_READDIR_DOCUMENTED_OPTIONS: ReadonlySet<string> = new Set([
   "encoding",

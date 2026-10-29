@@ -50,6 +50,25 @@ void scr_watch_thunk0(ScrClosure *cb, const char *event, const char *filename);
 void scr_watch_thunk_event(ScrClosure *cb, const char *event, const char *filename);
 void scr_watch_err_thunk0(ScrClosure *cb, ScrError *err);
 void scr_watch_install(void);
+
+/* ── fs.watchFile (scr_watch_file.c — same gating precedent: linked only
+ * when the program uses it). Stat polling in Node's shape: one poller per
+ * RESOLVED path, shared by every listener on it. */
+typedef void (*ScrWatchFileFn)(ScrClosure *cb, ScrStats *current, ScrStats *previous);
+/* fs.watchFile(path, { interval, persistent }, listener) — cb MOVES in;
+ * the adapter calls the listener with (current, previous) Stats (+1 each).
+ * The path is resolved (path.resolve) and keys the poller; a second call
+ * on the same resolved path adds the listener and ignores its options. */
+void scr_fs_watch_file(ScrStr *path, double interval, bool persistent, ScrClosure *cb,
+                       ScrWatchFileFn fn);
+/* fs.unwatchFile(path[, listener]) — cb borrowed, NULL removes every
+ * listener; with none left the poller stops. */
+void scr_fs_unwatch_file(ScrStr *path, ScrClosure *cb);
+void scr_watch_file_thunk0(ScrClosure *cb, ScrStats *current, ScrStats *previous);
+void scr_watch_file_thunk1(ScrClosure *cb, ScrStats *current, ScrStats *previous);
+void scr_watch_file_thunk2(ScrClosure *cb, ScrStats *current, ScrStats *previous);
+void scr_watch_file_install(void);
+
 /* The loop-side registration (scr_async.c, always linked) — the net
  * hook's exact shape, one more nullable slot set. */
 void scr_loop_set_watch(bool (*pending)(void), void (*dispatch)(void), int (*pollfd)(void));

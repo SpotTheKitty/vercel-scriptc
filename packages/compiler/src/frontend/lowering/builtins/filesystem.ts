@@ -8,6 +8,7 @@ import {
   builtinModuleFnOf,
   FS_READDIR_DOCUMENTED_OPTIONS,
   FS_WATCH_DOCUMENTED_OPTIONS,
+  FS_WATCH_FILE_DOCUMENTED_OPTIONS,
   fenceOrDropOptionKey,
 } from "../surfaces.js";
 import { defaultAfterUndefined, lowerStaticallyUndefinedArgument } from "../optional-arguments.js";
@@ -1257,6 +1258,128 @@ export function lowerFsWatchCall(lowerer: Lowerer, expr: ts.CallExpression, loc:
     fn: args.length === 2 ? "fs.watchCb" : "fs.watch",
     args,
     type: FSWATCHER_T,
+    loc,
+  };
+}
+
+/** `fs.watchFile(path[, options], listener)` and
+ * `fs.unwatchFile(path[, listener])` → the polling libCalls
+ * (scr_watch_file.c: libuv's uv_fs_poll shape — one poller per RESOLVED
+ * path, shared by every listener on it, re-armed every `interval` ms,
+ * 5007 by default, persistent by default). The listener takes
+ * (current: Stats, previous: Stats) — zero, one or both — and runs when a
+ * poll sees a difference; the first poll only records the baseline, and a
+ * file that cannot be stat'd polls as all-zero Stats. The options record
+ * follows the options-record stance: interval, persistent: true/false and
+ * bigint: false are accepted; bigint: true fences (BigIntStats); other
+ * documented keys fence by name; undocumented keys drop like Node.
+ * Statement position only — Node returns a StatWatcher, which has no
+ * lowering. Returns null for any untyped shape so the checked-dynamic
+ * ladder (fs.watchFileChk) keeps its current IR. */
+export function lowerFsWatchFileCall(
+  lowerer: Lowerer,
+  expr: ts.CallExpression,
+  loc: SrcLoc,
+  unwatch: boolean,
+): IrExpr | null {
+  const nodes = expr.arguments.nodes;
+  if (nodes.length < 1 || nodes.length > 3 || nodes.some(ts.isSpreadElement)) return null;
+  if (lowerer.mapTypeOf(lowerer.typeOf(nodes[0]!))?.kind !== "string") return null;
+  const path = lowerer.lowerExprExpecting(nodes[0]!, STRING);
+  if (unwatch) {
+    if (nodes.length > 2) return null;
+    const args: IrExpr[] = [path];
+    if (nodes.length === 2) {
+      if (lowerer.mapTypeOf(lowerer.typeOf(nodes[1]!))?.kind !== "func") return null;
+      args.push(lowerer.lowerExpr(nodes[1]!));
+    }
+    return { kind: "libCall", fn: "fs.unwatchFile", args, type: VOID, loc };
+  }
+  const hasOptions = nodes.length >= 2 && ts.isObjectLiteralExpression(nodes[1]!);
+  if (nodes.length === 3 && !hasOptions) return null;
+  if (nodes.length === 2 && hasOptions) return null; /* no listener */
+  const listenerArg = nodes[nodes.length - 1]!;
+  if (lowerer.mapTypeOf(lowerer.typeOf(listenerArg))?.kind !== "func") return null;
+  const parent = expr.parent;
+  if (!ts.isExpressionStatement(parent) && !(ts.isArrowFunction(parent) && parent.body === expr)) {
+    lowerer.unsupported(
+      "SC1090",
+      expr,
+      "using the returned StatWatcher (register the fs.watchFile call as its own statement)",
+    );
+  }
+  let interval: IrExpr | null = null;
+  let persistent: IrExpr | null = null;
+  if (hasOptions) {
+    for (const prop of (nodes[1] as ts.ObjectLiteralExpression).properties.nodes) {
+      if (!ts.isPropertyAssignment(prop) && !ts.isShorthandPropertyAssignment(prop)) {
+        lowerer.noLowering(
+          "fs.watchFile options with computed keys or spreads",
+          prop,
+          "each option must be a plain `name: value` entry with a literal key",
+        );
+      }
+      if (!ts.isIdentifier(prop.name) && !ts.isStringLiteral(prop.name)) {
+        lowerer.noLowering(
+          "fs.watchFile options with computed keys",
+          prop,
+          "each option must be a plain `name: value` entry with a literal key",
+        );
+      }
+      const key = prop.name.text;
+      const value = ts.isPropertyAssignment(prop)
+        ? prop.initializer
+        : ts.isShorthandPropertyAssignment(prop)
+          ? prop.name
+          : null;
+      if (key === "interval" && value !== null) {
+        interval = lowerer.lowerExprExpecting(value, F64);
+        continue;
+      }
+      if (key === "persistent" && value !== null) {
+        persistent = lowerer.lowerExprExpecting(value, BOOL);
+        continue;
+      }
+      if (key === "bigint") {
+        // The fallback's option record declares `bigint: false`, so the
+        // false literal (or `false` as a value) states the lowered Stats
+        // shape; BigIntStats has no lowering.
+        if (value !== null && value.kind === ts.SyntaxKind.FalseKeyword) continue;
+        lowerer.noLowering(
+          "fs.watchFile with bigint: true",
+          prop,
+          "the listener receives Stats (double integers); BigIntStats has no lowering",
+        );
+      }
+      fenceOrDropOptionKey(
+        lowerer,
+        prop,
+        key,
+        "fs.watchFile",
+        FS_WATCH_FILE_DOCUMENTED_OPTIONS,
+        "interval, persistent: true/false, and bigint: false are the accepted options",
+      );
+      // An undocumented key, dropped like Node drops it.
+    }
+  }
+  const cb = lowerer.lowerExpr(listenerArg);
+  if (
+    cb.type.kind !== "func" ||
+    cb.type.ret.kind !== "void" ||
+    cb.type.params.length > 2 ||
+    !cb.type.params.every((p) => p.kind === "stats")
+  ) {
+    lowerer.noLowering(
+      "fs.watchFile with this listener shape",
+      listenerArg,
+      "the listener takes (current: Stats, previous: Stats)",
+    );
+  }
+  return {
+    kind: "libCall",
+    fn: "fs.watchFile",
+    args: [path, interval ?? numLit(5007, loc), persistent ?? boolLit(true, loc), cb],
+    type: VOID,
     loc,
   };
 }

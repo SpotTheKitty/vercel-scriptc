@@ -1311,6 +1311,16 @@ function buildLibFnSignatures() {
     // the null slot pins the arity and the receiver.
     "watcher.on": { argTypes: [FSWATCHER_T, F64, F64, null], result: VOID },
     "watcher.off": { argTypes: [FSWATCHER_T, F64, null], result: VOID },
+    /** fs.watchFile(path, interval, persistent, listener) → void
+     * (scr_watch_file.c — its own gated unit; moduleUsesFsWatchFile is the
+     * switch, and scr_watch_file_install() is emitted with it). One
+     * libuv-shaped stat poller per RESOLVED path, shared by every listener
+     * on it; the listener's (current, previous) Stats func type is
+     * program-dependent, so the slot pins the arity. Statement position
+     * only (Node returns a StatWatcher). fs.unwatchFile(path[, listener])
+     * takes a borrowed listener; the null slot is the absent one. */
+    "fs.watchFile": { argTypes: [STRING, F64, BOOL, null], result: VOID },
+    "fs.unwatchFile": { argTypes: [STRING, null], result: VOID },
     /** The composed `new crypto.X509Certificate(data).fingerprint` read
      * (scr_lib.c — no certificate handle exists): the SHA-1 of the DER,
      * uppercase colon-separated, over PEM or raw-DER Buffer input; other

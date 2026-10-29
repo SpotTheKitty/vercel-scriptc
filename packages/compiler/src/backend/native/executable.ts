@@ -336,6 +336,9 @@ const RUNTIME_UNITS: readonly RuntimeUnit[] = [
   unit((u) => u.opts.dgram && u.opts.dgramDyn, "scr_dgram_dyn.c"),
   unit((u) => u.opts.textCodecDyn, "scr_text_codec_dyn.c"),
   unit((u) => u.opts.watch, "scr_watch.c"),
+  // fs.watchFile's stat poller: its own gated unit (no loop hook — the
+  // re-armed timers are the liveness), linked only by programs that poll.
+  unit((u) => u.opts.watchFile, "scr_watch_file.c"),
   unit((u) => u.opts.foreignFfi, "scr_ffi_queue.c"),
   unit((u) => u.opts.nodeTest, "scr_test.c"),
   unit((u) => u.opts.webcrypto, "scr_webcrypto.c"),

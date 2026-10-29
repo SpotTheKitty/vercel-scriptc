@@ -1090,6 +1090,8 @@ export const MAY_THROW_LIB_FNS: ReadonlySet<IrLibFn> = new Set([
   "fs.watchCb",
   "watcher.on",
   "watcher.off",
+  "fs.watchFile",
+  "fs.unwatchFile",
   "crypto.x509Fingerprint",
   "crypto.x509FingerprintStr",
   "crypto.x509ValidFrom",

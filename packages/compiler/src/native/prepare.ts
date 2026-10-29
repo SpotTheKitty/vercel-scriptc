@@ -268,6 +268,7 @@ function validFeatures(value: unknown): value is NativeLinkFeatures {
     "dgramDyn",
     "textCodecDyn",
     "watch",
+    "watchFile",
     "foreignFfi",
     "nodeTest",
     "tls",
