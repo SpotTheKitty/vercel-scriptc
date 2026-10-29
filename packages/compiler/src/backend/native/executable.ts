@@ -409,6 +409,9 @@ const RUNTIME_DEFINES: readonly {
   { define: "SCR_JS_TIER", when: (opts) => opts.dynTier === true },
   { define: "SCR_WARNING_REPLACE", when: (opts) => opts.warningReplace },
   { define: "SCR_STDIO_EXTENDED", when: (opts) => opts.stdioExtended },
+  // scr_stream.c's write-callback error publication, which the compiler's
+  // error-first write adapter reads.
+  { define: "SCR_STREAM_WRITE_ERRORS", when: (opts) => opts.streamWriteErrors },
   // scr_async.c's native promise reactions, which the web streams unit uses,
   // scr_json.c's and scr_dyn_builtin_class.c's instanceof over its classes,
   // and scr_fetch.c's bodies of its streams.

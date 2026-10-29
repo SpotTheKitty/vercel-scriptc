@@ -1185,6 +1185,10 @@ const RUNTIME_FEATURE_RULES = {
       (node.kind === "dynInvoke" && STDIO_EXTENDED_NAMES.has(node.method)) ||
       (node.kind === "strLit" && STDIO_EXTENDED_NAMES.has(node.value)),
   }),
+  /** A write completion callback that takes the error argument lowers
+   * through writable.writeEcb: the SCR_STREAM_WRITE_ERRORS stream unit
+   * publishes the error the adapter delivers. */
+  streamWriteErrors: rule({ fns: ["writable.writeEcb"] }),
   stream: rule({
     initial: (mod) => (mod.classes ?? []).some((c) => RUNTIME_STREAM_CLASSES.has(c.name)),
     fns: [...STREAM_LIB_FNS, "dyn.builtinStreamClass"],
@@ -1309,6 +1313,7 @@ function noRuntimeFeatures(): RuntimeFeatures {
     searchParams: false,
     urlIdna: false,
     stdioExtended: false,
+    streamWriteErrors: false,
     moduleNamespace: false,
     moduleNamespaceDyn: false,
     stream: false,

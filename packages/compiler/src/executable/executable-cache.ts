@@ -65,6 +65,8 @@ export interface EarlyExecutableNativeFeatures {
   wasm?: boolean;
   warningReplace?: boolean;
   stdioExtended?: boolean;
+  /** Error-taking write completion callbacks: SCR_STREAM_WRITE_ERRORS. */
+  streamWriteErrors?: boolean;
   nodeIsland?: boolean;
   moduleNamespace?: boolean;
   moduleNamespaceDyn?: boolean;

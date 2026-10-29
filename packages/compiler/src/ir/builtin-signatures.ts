@@ -4576,6 +4576,10 @@ function buildLibFnSignatures() {
     "writable.writeU": { argTypes: [null, null], result: BOOL },
     "writable.writeDyn": { argTypes: [null, DYN], result: BOOL },
     "writable.writeEnc": { argTypes: [null, F64, DYN], result: BOOL },
+    /** The error-first write form: (recv, mode, chunk, encoding, cb) where
+     * mode 0 is a bytes chunk, 1 a string, 2 a run-time chunk, and the
+     * callback takes the completion's error (Node's null on success). */
+    "writable.writeEcb": { argTypes: [null, F64, null, DYN, null], result: BOOL },
     "writable.end": { argTypes: [null, F64], result: VOID },
     "writable.cork": { argTypes: [null], result: VOID },
     "writable.uncork": { argTypes: [null], result: VOID },

@@ -334,6 +334,16 @@ export function variantsFor(source) {
       defines: ["SCR_NODE_ISLANDS"],
     });
   }
+  // Error-taking write completion callbacks: the stream unit publishes the
+  // error each callback receives; every other program keeps the default
+  // object, byte for byte.
+  if (source === "scr_stream.c") {
+    variants.push({
+      id: "write-errors",
+      when: { streamWriteErrors: true },
+      defines: ["SCR_STREAM_WRITE_ERRORS"],
+    });
+  }
   if (source === "scr_cycle.c") {
     // The young-in nursery (SCRIPTC_YOUNG_NURSERY=1): the collector with
     // nursery collections; programs built without it link the default.

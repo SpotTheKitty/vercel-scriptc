@@ -1950,6 +1950,7 @@ export const USES_TIMERS_LIB_FNS = new Set<string>([
   "writable.writeU",
   "writable.writeDyn",
   "writable.writeEnc",
+  "writable.writeEcb",
   "writable.end",
   "writable.uncork",
   "stream.destroy",

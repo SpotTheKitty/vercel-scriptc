@@ -34,6 +34,9 @@ export interface NativeLinkFeatures {
   /** The program uses process.stdin.setEncoding, string 'data' listeners
    * or stdio 'resize' events: links the SCR_STDIO_EXTENDED events unit. */
   stdioExtended?: boolean;
+  /** A write completion callback takes the error argument: links the
+   * SCR_STREAM_WRITE_ERRORS build of the stream unit. */
+  streamWriteErrors?: boolean;
   /** Calls into Node.js (@scriptc/node): scr_node_island.c and the
    * SCR_NODE_ISLANDS variant of the event loop unit. */
   nodeIsland?: boolean;
