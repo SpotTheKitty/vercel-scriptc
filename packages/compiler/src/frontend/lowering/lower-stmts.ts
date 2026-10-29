@@ -7329,13 +7329,18 @@ export function jsBindingHasOpenWrites(lowerer: Lowerer, decl: ts.VariableDeclar
     )
   )
     return true;
-  // A `+=` of a string turns a number or boolean binding into a string
-  // (`n += "px"`); the checker keeps the declared type.
+  // A `+=` of a string, or of a value that may be one, turns a number or
+  // boolean binding into a string (`n += "px"`); the checker keeps the
+  // declared type.
+  const mayBeString = (type: ts.Type): boolean =>
+    type.flags & ts.TypeFlags.Union
+      ? constituentTypes(type).some(mayBeString)
+      : (type.flags & ts.TypeFlags.StringLike) !== 0;
   if (
     candidates.some(
       (node) =>
         node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
-        (lowerer.typeOf(node.right).flags & ts.TypeFlags.StringLike) !== 0,
+        mayBeString(lowerer.typeOf(node.right)),
     )
   ) {
     const declared = lowerer.mapTypeOf(lowerer.typeOf(decl.name));
@@ -7372,6 +7377,13 @@ export function jsBindingHasOpenWrites(lowerer: Lowerer, decl: ts.VariableDeclar
   if (declared === null || declared.kind === "dyn" || declared.kind === "union") return false;
   return differing.some((node) => {
     const written = lowerer.mapTypeOf(lowerer.typeOf(node.right));
+    // A union a primitive binding cannot hold (`x = c ? 1 : "a"` into
+    // `var x = 0`).
+    if (
+      written?.kind === "union" &&
+      (declared.kind === "f64" || declared.kind === "bool" || declared.kind === "string")
+    )
+      return true;
     return (
       written !== null &&
       written.kind !== "dyn" &&

@@ -338,6 +338,16 @@ function propertyNameText(name: Node): string | null {
   return null;
 }
 
+/** Whether an object literal has a spread or a key not known statically. */
+function hasUnknownKeys(node: Node): boolean {
+  if (!ts.isObjectLiteralExpression(node)) return false;
+  return list(node.properties).some((p) => {
+    if (ts.isSpreadAssignment(p)) return true;
+    const name = (p as { name?: Node }).name;
+    return name !== undefined && propertyNameText(name) === null;
+  });
+}
+
 const shortFiles = new Map<string, string>();
 
 function shortFile(fileName: string): string {
@@ -943,7 +953,11 @@ class Analyzer {
     this.escapedFunctionCalls.add(info);
     this.activate(info);
     for (const p of info.params) this.add(p, this.top);
-    if (!info.isArrow && info.ownerClass === null) this.add(info.thisNode, this.top);
+    // Unknown code can call a class's method with any receiver too (through
+    // `Reflect.get` with a proxy as the receiver); in the program's own
+    // files its receiver is ⊤.
+    if (!info.isArrow && (info.ownerClass === null || !isPackageJsFile(info.node.getSourceFile())))
+      this.add(info.thisNode, this.top);
     this.sink(info.ret, reason);
   }
 
@@ -1063,6 +1077,35 @@ class Analyzer {
       }
     }
     return out;
+  }
+
+  /** Whether every instance of a class has the own field `name`: a class
+   * of its chain declares it, or a constructor stores it in a statement
+   * that runs whenever the constructor completes. */
+  fieldSurelyPresent(decl: Node, name: string): boolean {
+    for (const c of this.classChain(decl)) {
+      for (const m of list((c as ts.ClassLikeDeclaration).members)) {
+        if (isStatic(m)) continue;
+        const mn = (m as { name?: Node }).name;
+        if (ts.isPropertyDeclaration(m) && mn !== undefined && propertyNameText(mn) === name)
+          return true;
+        if (!ts.isConstructorDeclaration(m) || m.body === undefined) continue;
+        for (const st of list(m.body.statements)) {
+          if (ts.isVariableStatement(st)) continue;
+          if (!ts.isExpressionStatement(st)) break;
+          const e = st.expression;
+          if (
+            ts.isBinaryExpression(e) &&
+            e.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+            ts.isPropertyAccessExpression(e.left) &&
+            e.left.expression.kind === ts.SyntaxKind.ThisKeyword &&
+            e.left.name.text === name
+          )
+            return true;
+        }
+      }
+    }
+    return false;
   }
 
   lookupMember(
@@ -1719,7 +1762,12 @@ class Analyzer {
         const src = this.expr(s.expression);
         const target = this.newNode();
         if (ts.isForInStatement(s)) this.add(target, this.prim("string"));
-        else this.iterateInto(src, target, s);
+        else if (s.awaitModifier !== undefined) {
+          // `for await` awaits each value a sync iterable yields.
+          const yielded = this.newNode();
+          this.iterateInto(src, yielded, s);
+          this.awaitInto(yielded, target);
+        } else this.iterateInto(src, target, s);
         const init = s.initializer;
         if (ts.isVariableDeclarationList(init)) {
           for (const d of list(init.declarations)) {
@@ -1836,9 +1884,13 @@ class Analyzer {
     this.on(src, (a) => {
       if (a.kind === "array" || a.kind === "collection") this.edge(this.element(a), dst);
       else if (a.kind === "prim" && a.label === "string") this.add(dst, this.prim("string"));
-      else if (a.kind === "prim" || a.kind === "object" || a.kind === "dictionary") {
-        /* not iterable (a TypeError): no value. Literals with a
-           Symbol.iterator member have a computed key; they are G sites. */
+      else if (a.kind === "object" && a.node !== undefined && hasUnknownKeys(a.node)) {
+        // An object literal with a computed key or a spread may have a
+        // Symbol.iterator or Symbol.asyncIterator member.
+        this.add(dst, this.top);
+        this.escape(a, `iterated at ${this.loc(site)}`);
+      } else if (a.kind === "prim" || a.kind === "object" || a.kind === "dictionary") {
+        /* not iterable (a TypeError): no value. */
       } else {
         this.add(dst, this.top);
         if (a.kind !== "top") this.escape(a, `iterated at ${this.loc(site)}`);
@@ -2712,6 +2764,15 @@ class Analyzer {
         }
         if (this.classChain(decl).some((c) => this.baseClass(c) === undefined))
           this.add(dst, this.top);
+        // A field the instance may lack reads undefined (`Late` sets `x`
+        // only on one branch). In the program's own files only.
+        if (
+          member === null &&
+          !OBJECT_PROTOTYPE_MEMBERS.has(name) &&
+          !isPackageJsFile(decl.getSourceFile()) &&
+          !this.fieldSurelyPresent(decl, name)
+        )
+          this.add(dst, this.prim("undefined"));
         this.edge(this.field(a, name), dst);
         this.unknownKeysInto(a, dst);
         return;
@@ -3467,8 +3528,12 @@ class Analyzer {
           this.add(this.element(out), this.prim("undefined"));
           this.add(dst, out);
           this.add(dst, this.prim("null"));
-        } else if (r !== undefined) prim(r);
-        else if (method === "replace" || method === "replaceAll") prim("string");
+        } else if (method === "valueOf") prim(path.slice(0, path.indexOf(".")));
+        else if (r !== undefined) {
+          prim(r);
+          // An index out of range reads undefined.
+          if (method === "at" || method === "codePointAt") prim("undefined");
+        } else if (method === "replace" || method === "replaceAll") prim("string");
         else escapeAll();
         if (method === "replace" || method === "replaceAll")
           callback(1, [this.constNode(this.prim("string"))], null);
