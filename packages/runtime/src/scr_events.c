@@ -1534,9 +1534,12 @@ static bool scr_stdio_intercept(int fd, const void *data, size_t length, int fla
   }
   ScrDyn *chunk;
   if (flags & SCR_STDIO_HOOK_BYTES) {
+    /* Always a Buffer: a write from a 'data' listener of a stream with an
+     * encoding set is still the bytes it was given. */
     ScrBytes *b = scr_bytes_new(SCR_BYTES_U8, (double)length);
     memcpy(b->data, data, length);
-    chunk = scr_dyn_new_chunk(b);
+    b->is_buffer = true;
+    chunk = scr_dyn_new_bytes(b);
     scr_bytes_release(b);
   } else {
     ScrStr *text = scr_str_new(data, length);
