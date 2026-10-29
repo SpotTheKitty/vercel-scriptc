@@ -2646,16 +2646,18 @@ export function lowerDestructuringDecl(
             type: DYN,
             loc,
           }
-        : spelling !== null
-          ? {
-              kind: "dynDestrCheck",
-              value: unitValue(),
-              spelling,
-              ...firstPatternProp(lowerer, decl.name as ts.ObjectBindingPattern),
-              type: DYN,
-              loc,
-            }
-          : null;
+        : firstReadsWithDefault(decl.name as ts.ObjectBindingPattern)
+          ? firstKeyRead(lowerer, decl.name as ts.ObjectBindingPattern, unitValue, loc)
+          : spelling !== null
+            ? {
+                kind: "dynDestrCheck",
+                value: unitValue(),
+                spelling,
+                ...firstPatternProp(lowerer, decl.name as ts.ObjectBindingPattern),
+                type: DYN,
+                loc,
+              }
+            : null;
       out.push({
         kind: "if",
         cond: {
@@ -2696,22 +2698,25 @@ export function lowerDestructuringDecl(
   // value: RequireObjectCoercible with V8's own TypeError ("Cannot
   // destructure property 'a' of 'f(...)' as it is null.") for the source
   // spellings the assignment form reproduces; other sources are refused,
-  // as in the assignment form. JavaScript files keep their existing
-  // per-read errors, except that a runtime computed first key checks the
-  // source first: Node throws before it evaluates any key, and V8's bare
-  // message names the source.
-  const jsRuntimeKeyCheck =
+  // as in the assignment form. A JavaScript object pattern over a dyn
+  // source checks the source first in the same way when V8 can spell it,
+  // so a null or undefined source throws Node's message before any key
+  // is read or evaluated; other sources keep their per-read errors. V8
+  // skips the check when the first element has a default and a static
+  // key: the read of that key throws ("Cannot read properties of null
+  // (reading 'a')"), and so does the lowering's.
+  const jsSourceCheck =
     init.type.kind === "dyn" &&
     ts.isObjectBindingPattern(decl.name) &&
     isJsSourceFile(ts.getSourceFileOfNode(decl)) &&
-    (decl.name.elements.nodes.length === 0 || startsWithRuntimeKey(lowerer, decl.name)) &&
     destrSpellingOf(decl.initializer) !== null;
   if (
-    jsRuntimeKeyCheck ||
-    (init.type.kind === "dyn" &&
-      ts.isObjectBindingPattern(decl.name) &&
-      !isJsSourceFile(ts.getSourceFileOfNode(decl)) &&
-      lowerer.anyOrigin(decl.initializer))
+    (jsSourceCheck ||
+      (init.type.kind === "dyn" &&
+        ts.isObjectBindingPattern(decl.name) &&
+        !isJsSourceFile(ts.getSourceFileOfNode(decl)) &&
+        lowerer.anyOrigin(decl.initializer))) &&
+    !firstReadsWithDefault(decl.name as ts.ObjectBindingPattern)
   ) {
     const spelling = destrSpellingOf(decl.initializer);
     if (spelling === null) {
@@ -9692,6 +9697,39 @@ export function lowerDestructuringAssign(
 ): IrStmt {
   const parts = destructuringAssignInto(lowerer, target, init, null, blame, loc);
   return { kind: "block", body: parts.stmts, loc };
+}
+
+/** An object pattern whose first element has a default and a static key
+ * (`{ a = 1 }`, `{ a: b = 1 }`): V8 reads that key without checking the
+ * source first, so a null or undefined source throws the read's TypeError. */
+function firstReadsWithDefault(pattern: ts.ObjectBindingPattern): boolean {
+  const first = pattern.elements.nodes[0];
+  return (
+    first !== undefined &&
+    first.dotDotDotToken === undefined &&
+    first.initializer !== undefined &&
+    !(first.propertyName !== undefined && ts.isComputedPropertyName(first.propertyName))
+  );
+}
+
+/** The read of the first key of a pattern that `firstReadsWithDefault`
+ * accepts, over a dyn source: on null or undefined it throws the read's
+ * TypeError, as V8 does. Null when the key has no static name. */
+function firstKeyRead(
+  lowerer: Lowerer,
+  pattern: ts.ObjectBindingPattern,
+  source: () => IrExpr,
+  loc: SrcLoc,
+): IrExpr | null {
+  const { firstProp } = firstPatternProp(lowerer, pattern);
+  if (firstProp === undefined) return null;
+  return {
+    kind: "dynKeyGet",
+    key: { kind: "strLit", value: firstProp, type: STRING, loc },
+    value: source(),
+    type: DYN,
+    loc,
+  };
 }
 
 /** The first property V8 names in an object pattern's destructuring
