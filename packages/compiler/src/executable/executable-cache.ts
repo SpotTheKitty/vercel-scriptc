@@ -64,6 +64,7 @@ export interface EarlyExecutableNativeFeatures {
   eventTarget?: boolean;
   wasm?: boolean;
   warningReplace?: boolean;
+  recordViewPartial?: boolean;
   stdioExtended?: boolean;
   nodeIsland?: boolean;
   moduleNamespace?: boolean;

@@ -1342,10 +1342,9 @@ typedef struct {
   size_t key_len;
   const size_t *offsets;
 } ScrRecordViewSource;
-/* The slot of field `position` of a view, or NULL for a field the viewed
- * record does not declare (a PARTIAL view holds SIZE_MAX; record-views.ts).
- * A field address of a shape some partial view may present tests the answer
- * and traps with the program's message. */
+/* The slot of field `position` of a view. The SCR_RECORD_VIEW_PARTIAL build
+ * of scr_json.c, which only a program with a partial record assertion links,
+ * answers NULL for a field the viewed record does not declare (record-views.ts). */
 void *scr_record_view_slot(void *view, size_t position);
 void *scr_record_view_field(void *value, size_t offset, size_t position);
 void *scr_dyn_record_view(ScrDyn *d, const ScrRecordViewSource *sources, size_t count,

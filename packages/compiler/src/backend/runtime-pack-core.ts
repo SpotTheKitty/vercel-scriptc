@@ -100,6 +100,7 @@ export interface RuntimeFeatureSet extends NativeLinkFeatures {
   builtinValues: boolean;
   computedRequire: boolean;
   warningReplace: boolean;
+  recordViewPartial: boolean;
   stdioExtended: boolean;
   nodeIsland: boolean;
   brotli: boolean;
@@ -311,6 +312,7 @@ export function effectiveRuntimeFeatures(
     builtinValues: features.builtinValues === true,
     computedRequire: features.computedRequire === true,
     warningReplace: features.warningReplace === true,
+    recordViewPartial: features.recordViewPartial === true,
     stdioExtended: features.stdioExtended === true,
     nodeIsland: features.nodeIsland === true,
     brotli: features.brotli === true,

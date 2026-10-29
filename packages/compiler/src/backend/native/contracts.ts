@@ -159,6 +159,9 @@ export interface CcOptions {
   wasm?: boolean;
   /** SCR_WARNING_REPLACE: process.emitWarning replacement support. */
   warningReplace?: boolean;
+  /** SCR_RECORD_VIEW_PARTIAL: the scr_json.c build whose view slot answers
+   * NULL for a field a partial record view does not have. */
+  recordViewPartial?: boolean;
   /** SCR_STDIO_EXTENDED: stdin encoding, string data listeners, resize. */
   stdioExtended?: boolean;
   /** Calls into Node.js (@scriptc/node): compiles scr_node_island.c and
