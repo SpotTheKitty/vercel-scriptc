@@ -71,9 +71,16 @@ ScrStr *scr_process_cwd(void);      /* +1 fresh (getcwd) */
 bool scr_stdio_write(int fd, const void *data, size_t len);
 bool scr_stdio_write_str(int fd, const ScrStr *s);
 int scr_stdio_write_raw(int fd, const void *data, size_t len);
-/* `wide` marks string bytes that may hold lone surrogates, which become
- * U+FFFD when they reach the stream itself. */
-extern SCR_TL bool (*scr_stdio_write_hook)(int fd, const void *data, size_t len, bool wide);
+/* `flags` describes the chunk a patched write receives: SCR_STDIO_HOOK_WIDE
+ * marks string bytes that may hold lone surrogates (they become U+FFFD when
+ * they reach the stream itself), SCR_STDIO_HOOK_CONSOLE a console line
+ * (Node's console passes its error handler as the second argument), and
+ * SCR_STDIO_HOOK_BYTES a byte chunk (the replacement receives a Buffer). */
+enum { SCR_STDIO_HOOK_WIDE = 1, SCR_STDIO_HOOK_CONSOLE = 2, SCR_STDIO_HOOK_BYTES = 4 };
+extern SCR_TL bool (*scr_stdio_write_hook)(int fd, const void *data, size_t len, int flags);
+/* A string chunk given as bytes (UTF-8, no lone surrogates): what
+ * scr_stdio_write was for callers that write text. */
+bool scr_stdio_write_text(int fd, const void *data, size_t len);
 /* A worker created with the stdout or stderr option: answers true when it
  * took the bytes for fd 1 or 2 instead of the process descriptor. */
 extern SCR_TL bool (*scr_stdio_capture)(int fd, const void *data, size_t len);
