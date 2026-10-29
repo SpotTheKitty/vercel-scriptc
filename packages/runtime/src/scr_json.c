@@ -6391,7 +6391,18 @@ ScrDyn *scr_dyn_new_func(ScrClosure *clo, ScrDynThunk thunk, uint32_t arity, con
   d->v.fn.arity = clo->identity != NULL ? clo->identity_length : arity;
   d->v.fn.class_obj = NULL;
   d->v.fn.message = NULL;
+  d->v.fn.js = NULL;
   return d;
+}
+
+/* The emitted fast path loads the entry at this offset (64-bit targets). */
+_Static_assert(sizeof(void *) != 8 || offsetof(ScrDyn, v.fn.js) == 72,
+               "ScrDyn.v.fn.js moved: update the dynamic tier's call sites");
+
+void scr_dyn_func_set_js(ScrDyn *fn, ScrDynThunk thunk, ScrDynJsEntry entry) {
+  /* As scr_dyn_func_set_message: an adapted function's original box keeps
+   * its own entries. */
+  if (fn && fn->kind == SCR_DYN_FUNC && fn->v.fn.thunk == thunk) fn->v.fn.js = entry;
 }
 
 void scr_dyn_func_set_message(ScrDyn *fn, ScrDynThunk thunk, ScrDynMessageListener listener) {
