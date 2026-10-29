@@ -489,8 +489,8 @@ void scr_console_clear(void) {
   if (!scr_process_is_tty(1)) return;
   const char *term = getenv("TERM");
   if (term && strcmp(term, "dumb") == 0) return;
-  scr_stdio_write(1, "\x1b[1;1H", 6);
-  scr_stdio_write(1, "\x1b[0J", 4);
+  scr_stdio_write_text(1, "\x1b[1;1H", 6);
+  scr_stdio_write_text(1, "\x1b[0J", 4);
 }
 
 /* console.dir over a dyn value: inspect with custom inspection off. The
