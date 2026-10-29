@@ -77,10 +77,32 @@ function depth(): number {
   return walk(["a", "b", "c"], 0) * 10 + calls;
 }
 
+// A `var` that a second declaration re-initializes is one binding the
+// frame writes: a closure the generic arrow returned reads the new value.
+function redeclared(): string {
+  var label = "first";
+  const make = <T,>(value: T): (() => string) => () => `${label}:${String(value)}`;
+  const getter = make(1);
+  var label = "second";
+  return `${getter()} ${make(true)()}`;
+}
+
+// A `var` in a for-of head is one binding the loop writes on every
+// iteration: closures returned in earlier iterations read the last value.
+function loopVar(): string {
+  const readers: Array<() => string> = [];
+  for (var item of ["a", "b", "c"]) {
+    const make = <T,>(value: T): (() => string) => () => `${item}${String(value)}`;
+    readers.push(make(1));
+  }
+  return readers.map((reader) => reader()).join(" ");
+}
+
 async function main(): Promise<void> {
   console.log((await makeRunner("p").run(2)).join(" "));
   console.log(accumulate(5));
   console.log(snapshots());
   console.log(depth());
+  console.log(redeclared(), loopVar());
 }
 main();

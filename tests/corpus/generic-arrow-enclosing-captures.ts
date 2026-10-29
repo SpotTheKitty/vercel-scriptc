@@ -72,3 +72,14 @@ function twice(offset: number, value: string): string {
 
 console.log(twice(10, "v"));
 console.log(twice(20, "w"));
+
+// Parameter defaults that read enclosing bindings: the captures are bound
+// before the defaults lower.
+function withDefault(base: number): string {
+  const unit = "px";
+  const fmt = <T extends number | string>(value: T, suffix = unit, scale = base): string =>
+    `${value}${suffix}x${scale}`;
+  return `${fmt(1)} ${fmt("2", "em")}`;
+}
+
+console.log(withDefault(3));

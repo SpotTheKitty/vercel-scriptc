@@ -1349,18 +1349,21 @@ export function lowerGenericInstance(
         fnCtx.captures!.push({ localId: entry.id, name: entry.name, type: entry.type });
       }
     }
-    // Default-param initializers lower per instance, with the bindings
-    // threaded — a default mentioning T resolves like any body expression.
-    const declared = lowerer.declareParams(decl.parameters.nodes, inst.params);
-    params.push(...declared.params);
     // The enclosing-frame values travel as TRAILING parameters, after the
     // declared ones: a call lowers its arguments first (JavaScript's
     // order), then reads the captures. Binding each local to the captured
-    // symbol is what lets the body resolve the reference.
+    // symbol is what lets the body resolve the reference; the locals are
+    // bound before the declared parameters so that a default initializer
+    // reading a capture resolves it too.
+    const captureParams: IrParam[] = [];
     for (const capture of envForm ? [] : (info.captures ?? [])) {
       const local = lowerer.declareLocal(capture.nameNode, capture.name, capture.type, false);
-      params.push({ localId: local.id, name: capture.name, type: capture.type });
+      captureParams.push({ localId: local.id, name: capture.name, type: capture.type });
     }
+    // Default-param initializers lower per instance, with the bindings
+    // threaded — a default mentioning T resolves like any body expression.
+    const declared = lowerer.declareParams(decl.parameters.nodes, inst.params);
+    params.push(...declared.params, ...captureParams);
     const body = [...receiverInit, ...declared.prologue];
     const bodyBlock = blockBodyOf(decl);
     if (bodyBlock) {
