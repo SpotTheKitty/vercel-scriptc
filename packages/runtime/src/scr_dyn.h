@@ -1463,7 +1463,7 @@ ScrStr *scr_js_wrapper_object_tag(ScrDyn *value);
 bool scr_js_wrapper_type_is(ScrDyn *value, ScrStr *probe);
 ScrDyn *scr_js_wrapper_guard(ScrDyn *value, ScrStr *consumer);
 ScrArr *scr_js_wrapper_guard_list(ScrArr *values, ScrStr *consumer);
-bool scr_js_wrapper_is_string_method(ScrDyn *value, ScrStr *name);
+bool scr_js_wrapper_is_string_method(ScrDyn *member, ScrStr *name);
 ScrDyn *scr_js_wrapper_this_string(ScrDyn *value, ScrStr *name);
 ScrDyn *scr_dyn_util_type_value(const ScrDyn *value, const ScrStr *probe);
 void scr_dyn_arr_push(ScrDyn *arr, ScrDyn *item);

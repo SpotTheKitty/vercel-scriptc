@@ -11,13 +11,17 @@ const execFileAsync = promisify(execFile);
 // JSON, util.inspect, structuredClone and deep equality cannot read a
 // wrapper's [[PrimitiveValue]] slot yet, so a wrapper anywhere in their
 // argument refuses with a catchable error instead of a silently wrong
-// answer. Values without a wrapper keep working in the same program.
+// answer, including one 100 levels deep or under a graph that shares its
+// objects. Values without a wrapper keep working in the same program, and
+// the search reaches each object once, so a cyclic value is checked in
+// linear time.
 test("graph-walking consumers refuse primitive wrapper objects", async () => {
   const outDir = mkdtempSync(join(tmpdir(), "scriptc-wrapper-refusals-"));
   const entry = join(outDir, "main.mjs");
   writeFileSync(
     entry,
     `
+import util from "node:util";
 function attempt(label, run) {
   try { run(); process.stdout.write(label + " ok\\n"); } catch (error) { process.stdout.write(label + " " + error.message + "\\n"); }
 }
@@ -26,6 +30,16 @@ attempt("log", () => console.log([new String("a")]));
 attempt("clone", () => structuredClone([new Boolean(true)]));
 attempt("plain json", () => JSON.stringify({ v: 3 }));
 attempt("plain clone", () => structuredClone([true]));
+let deep = new String("deep");
+for (let i = 0; i < 100; i++) deep = { next: deep };
+attempt("deep clone", () => structuredClone(deep));
+let shared = [new Number(1)];
+for (let i = 0; i < 40; i++) shared = { left: shared, right: shared };
+attempt("shared log", () => console.log(shared));
+const cyclic = JSON.parse('{ "name": "cyclic" }');
+cyclic.self = cyclic;
+cyclic.again = cyclic;
+attempt("cyclic inspect", () => util.inspect(cyclic));
 `,
   );
   const result = await compile(entry, {
@@ -46,6 +60,9 @@ attempt("plain clone", () => structuredClone([true]));
       `clone ${refused("structuredClone")}`,
       "plain json ok",
       "plain clone ok",
+      `deep clone ${refused("structuredClone")}`,
+      `shared log ${refused("console.log/util.inspect")}`,
+      "cyclic inspect ok",
       "",
     ].join("\n"),
   );

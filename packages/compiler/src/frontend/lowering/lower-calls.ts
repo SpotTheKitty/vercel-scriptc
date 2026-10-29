@@ -4303,6 +4303,7 @@ function lowerStringOrMemberCall(
   // In a program that creates wrapper objects, a receiver whose member is
   // the builtin String.prototype method runs the string lowering on
   // ToString of the receiver, after the arguments, as the builtin does.
+  // The member is read once: the check inspects the value the call read.
   const wrappers = (lowerer.createsWrappers ??= programCreatesWrappers(lowerer));
   const builtinLocal = wrappers ? lowerer.declareHiddenLocal("%dynCallStringMethod", BOOL) : null;
   const isString: IrExpr = builtinLocal
@@ -4313,35 +4314,12 @@ function lowerStringOrMemberCall(
   const callee = varRef(calleeLocal.id, DYN, loc);
   const stmts: IrStmt[] = [
     { kind: "varDecl", localId: receiverLocal.id, init: recv, loc },
-    ...(builtinLocal
-      ? [
-          {
-            kind: "varDecl" as const,
-            localId: builtinLocal.id,
-            init: {
-              kind: "logical" as const,
-              op: "||" as const,
-              left: receiverIsString,
-              right: {
-                kind: "libCall" as const,
-                fn: "wrapper.isStringMethod" as const,
-                args: [receiver, nameLit],
-                type: BOOL,
-                loc,
-              },
-              type: BOOL,
-              loc,
-            },
-            loc,
-          },
-        ]
-      : []),
     {
       kind: "varDecl",
       localId: calleeLocal.id,
       init: {
         kind: "ternary",
-        cond: isString,
+        cond: receiverIsString,
         then: dynUndefinedExpr(loc),
         else_: {
           kind: "dynKeyGet",
@@ -4355,6 +4333,29 @@ function lowerStringOrMemberCall(
       },
       loc,
     },
+    ...(builtinLocal
+      ? [
+          {
+            kind: "varDecl" as const,
+            localId: builtinLocal.id,
+            init: {
+              kind: "logical" as const,
+              op: "||" as const,
+              left: receiverIsString,
+              right: {
+                kind: "libCall" as const,
+                fn: "wrapper.isStringMethod" as const,
+                args: [callee, nameLit],
+                type: BOOL,
+                loc,
+              },
+              type: BOOL,
+              loc,
+            },
+            loc,
+          },
+        ]
+      : []),
   ];
   const args = call.arguments.nodes.map((node) => {
     const lowered = lowerer.lowerExpr(node);

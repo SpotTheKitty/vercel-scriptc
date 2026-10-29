@@ -263,36 +263,17 @@ static const ScrJsWrapperMember scr_js_wrapper_boolean_members[] = {
   {"toString", 0}, {"valueOf", 0}, {NULL, 0},
 };
 
-/* The kind's prototype object (borrowed), built on first use with
- * `constructor` (the compiled constructor value) and the members above.
- * Its own prototype is Object.prototype. */
-static ScrDyn *scr_js_wrapper_prototype(int kind, ScrDyn *constructor) {
-  if (scr_js_wrapper_prototypes[kind]) return scr_js_wrapper_prototypes[kind];
-  if (!scr_js_wrapper_cleanup_registered) {
-    scr_atexit(scr_js_wrapper_cleanup);
-    scr_js_wrapper_cleanup_registered = true;
-  }
-  ScrDyn *prototype = scr_dyn_new_obj();
-  scr_js_wrapper_define_hidden(prototype, "constructor", scr_dyn_retain(constructor));
-  const ScrJsWrapperMember *members = kind == SCR_JS_WRAPPER_STRING ? scr_js_wrapper_string_members
-                                    : kind == SCR_JS_WRAPPER_NUMBER ? scr_js_wrapper_number_members
-                                    : scr_js_wrapper_boolean_members;
-  for (const ScrJsWrapperMember *m = members; m->name; m++)
-    scr_js_wrapper_define_hidden(prototype, m->name, scr_js_wrapper_method_value(m->name, kind, m->length));
-  scr_js_wrapper_prototypes[kind] = prototype;
-  return prototype;
-}
-
-/* The wrapper of kind `kind` over `primitive` (borrowed; already the
- * converted primitive). +1. */
-static ScrDyn *scr_js_wrapper_make(int kind, ScrDyn *primitive, ScrDyn *const constructors[3]) {
+/* An object with the [[PrimitiveValue]] slot of kind `kind` over
+ * `primitive` (borrowed; already the converted primitive) and, for a
+ * String, its index properties and `length`. Its prototype is still
+ * Object.prototype. +1. */
+static ScrDyn *scr_js_wrapper_object(int kind, ScrDyn *primitive) {
   ScrJsWrapperSlot *slot = malloc(sizeof *slot);
   if (!slot) scr_trap("scriptc: out of memory\n");
   *slot = (ScrJsWrapperSlot){ 0, kind, scr_dyn_retain(primitive), NULL };
   /* scr_dyn_new_obj_with_identity retains once: the object's reference. */
   ScrDyn *object = scr_dyn_new_obj_with_identity(slot, scr_js_wrapper_slot_retain, scr_js_wrapper_slot_access);
   slot->object = object;
-  object->prototype = scr_dyn_retain(scr_js_wrapper_prototype(kind, constructors[kind]));
   if (kind == SCR_JS_WRAPPER_STRING) {
     /* Each UTF-16 code unit is an own index property. */
     ScrStr *text = primitive->v.str;
@@ -309,6 +290,45 @@ static ScrDyn *scr_js_wrapper_make(int kind, ScrDyn *primitive, ScrDyn *const co
     scr_dyn_obj_set(object, "length", 6, scr_dyn_new_num(units));
     scr_dyn_obj_set_attrs_at(object, scr_dyn_obj_index_of(object, "length", 6), false, false, false);
   }
+  return object;
+}
+
+/* The kind's prototype object (borrowed), built on first use with
+ * `constructor` (the compiled constructor value) and the members above.
+ * As in Node, it is itself a wrapper of "", 0 or false, so its valueOf
+ * and toString answer that primitive; its own prototype is
+ * Object.prototype. */
+static ScrDyn *scr_js_wrapper_prototype(int kind, ScrDyn *constructor) {
+  if (scr_js_wrapper_prototypes[kind]) return scr_js_wrapper_prototypes[kind];
+  if (!scr_js_wrapper_cleanup_registered) {
+    scr_atexit(scr_js_wrapper_cleanup);
+    scr_js_wrapper_cleanup_registered = true;
+  }
+  ScrDyn *primitive;
+  if (kind == SCR_JS_WRAPPER_STRING) {
+    ScrStr *empty = scr_str_new("", 0);
+    primitive = scr_dyn_new_str(empty);
+    scr_str_release(empty);
+  } else {
+    primitive = kind == SCR_JS_WRAPPER_NUMBER ? scr_dyn_new_num(0) : scr_dyn_new_bool(false);
+  }
+  ScrDyn *prototype = scr_js_wrapper_object(kind, primitive);
+  scr_dyn_release(primitive);
+  scr_js_wrapper_define_hidden(prototype, "constructor", scr_dyn_retain(constructor));
+  const ScrJsWrapperMember *members = kind == SCR_JS_WRAPPER_STRING ? scr_js_wrapper_string_members
+                                    : kind == SCR_JS_WRAPPER_NUMBER ? scr_js_wrapper_number_members
+                                    : scr_js_wrapper_boolean_members;
+  for (const ScrJsWrapperMember *m = members; m->name; m++)
+    scr_js_wrapper_define_hidden(prototype, m->name, scr_js_wrapper_method_value(m->name, kind, m->length));
+  scr_js_wrapper_prototypes[kind] = prototype;
+  return prototype;
+}
+
+/* The wrapper of kind `kind` over `primitive` (borrowed; already the
+ * converted primitive). +1. */
+static ScrDyn *scr_js_wrapper_make(int kind, ScrDyn *primitive, ScrDyn *const constructors[3]) {
+  ScrDyn *object = scr_js_wrapper_object(kind, primitive);
+  object->prototype = scr_dyn_retain(scr_js_wrapper_prototype(kind, constructors[kind]));
   return object;
 }
 
@@ -411,29 +431,88 @@ bool scr_js_wrapper_type_is(ScrDyn *value, ScrStr *probe) {
   return false;
 }
 
+/* The objects and arrays of a guarded value's graph still to search (a
+ * stack), and the ones already reached (an open-addressing set of
+ * addresses), each in inline storage until it outgrows it. */
+typedef struct {
+  const ScrDyn **stack;
+  size_t depth, stack_cap;
+  const ScrDyn **seen;
+  size_t seen_count, seen_cap; /* seen_cap is a power of two */
+  const ScrDyn *stack_inline[32];
+  const ScrDyn *seen_inline[64];
+} ScrJsWrapperWalk;
+
+static size_t scr_js_wrapper_seen_slot(const ScrDyn *const *seen, size_t cap, const ScrDyn *value) {
+  size_t i = ((uintptr_t)value >> 4) * 0x9E3779B97F4A7C15ull & (cap - 1);
+  while (seen[i] && seen[i] != value) i = (i + 1) & (cap - 1);
+  return i;
+}
+
+/* Adds an object or array to the search unless it was already reached. */
+static void scr_js_wrapper_walk_reach(ScrJsWrapperWalk *walk, const ScrDyn *value) {
+  if (!value || (value->kind != SCR_DYN_OBJ && value->kind != SCR_DYN_ARR)) return;
+  size_t i = scr_js_wrapper_seen_slot(walk->seen, walk->seen_cap, value);
+  if (walk->seen[i]) return;
+  walk->seen[i] = value;
+  if (++walk->seen_count * 2 > walk->seen_cap) {
+    size_t cap = walk->seen_cap * 2;
+    const ScrDyn **grown = calloc(cap, sizeof *grown);
+    if (!grown) scr_trap("scriptc: out of memory\n");
+    for (size_t j = 0; j < walk->seen_cap; j++)
+      if (walk->seen[j]) grown[scr_js_wrapper_seen_slot(grown, cap, walk->seen[j])] = walk->seen[j];
+    if (walk->seen != walk->seen_inline) free(walk->seen);
+    walk->seen = grown;
+    walk->seen_cap = cap;
+  }
+  if (walk->depth == walk->stack_cap) {
+    size_t cap = walk->stack_cap * 2;
+    const ScrDyn **grown = malloc(cap * sizeof *grown);
+    if (!grown) scr_trap("scriptc: out of memory\n");
+    memcpy(grown, walk->stack, walk->depth * sizeof *grown);
+    if (walk->stack != walk->stack_inline) free(walk->stack);
+    walk->stack = grown;
+    walk->stack_cap = cap;
+  }
+  walk->stack[walk->depth++] = value;
+}
+
 /* Whether `value`'s own data graph (array elements, own data properties of
  * ordinary objects and arrays; accessors are not called) holds a wrapper.
- * `depth` bounds cycles: a graph deeper than the limit is not searched
- * further. */
-static bool scr_js_wrapper_found(const ScrDyn *value, int depth) {
-  if (depth > 64) return false;
-  if (value->kind == SCR_DYN_OBJ) {
-    ScrJsWrapperSlot *slot = scr_js_wrapper_slot_of(value);
-    if (slot) {
-      scr_js_wrapper_slot_drop(slot);
-      return true;
+ * Each object and array is searched once, so shared and cyclic references
+ * end the search. */
+static bool scr_js_wrapper_found(const ScrDyn *value) {
+  if (value->kind != SCR_DYN_OBJ && value->kind != SCR_DYN_ARR) return false;
+  ScrJsWrapperWalk walk;
+  walk.stack = walk.stack_inline;
+  walk.depth = 0;
+  walk.stack_cap = sizeof walk.stack_inline / sizeof *walk.stack_inline;
+  walk.seen = walk.seen_inline;
+  walk.seen_count = 0;
+  walk.seen_cap = sizeof walk.seen_inline / sizeof *walk.seen_inline;
+  memset(walk.seen_inline, 0, sizeof walk.seen_inline);
+  scr_js_wrapper_walk_reach(&walk, value);
+  bool found = false;
+  while (!found && walk.depth > 0) {
+    const ScrDyn *current = walk.stack[--walk.depth];
+    if (current->kind == SCR_DYN_OBJ) {
+      ScrJsWrapperSlot *slot = scr_js_wrapper_slot_of(current);
+      if (slot) {
+        scr_js_wrapper_slot_drop(slot);
+        found = true;
+        break;
+      }
+      for (size_t i = 0; i < scr_dyn_obj_count(current); i++) {
+        ScrDynProp prop = scr_dyn_obj_prop_at(current, i);
+        if (!prop.accessor) scr_js_wrapper_walk_reach(&walk, prop.value);
+      }
+    } else {
+      for (size_t i = 0; i < current->v.arr.len; i++) scr_js_wrapper_walk_reach(&walk, current->v.arr.items[i]);
     }
-    for (size_t i = 0; i < scr_dyn_obj_count(value); i++) {
-      ScrDynProp prop = scr_dyn_obj_prop_at(value, i);
-      if (!prop.accessor && prop.value && scr_js_wrapper_found(prop.value, depth + 1)) return true;
-    }
-    return false;
   }
-  if (value->kind == SCR_DYN_ARR) {
-    for (size_t i = 0; i < value->v.arr.len; i++)
-      if (value->v.arr.items[i] && scr_js_wrapper_found(value->v.arr.items[i], depth + 1)) return true;
-  }
-  return false;
+  if (walk.stack != walk.stack_inline) free(walk.stack);
+  if (walk.seen != walk.seen_inline) free(walk.seen);
+  return found;
 }
 
 static void scr_js_wrapper_refuse(const ScrStr *consumer) {
@@ -450,7 +529,7 @@ static void scr_js_wrapper_refuse(const ScrStr *consumer) {
  * graph holds a wrapper: the consumer named by `consumer` cannot read the
  * [[PrimitiveValue]] slot yet. */
 ScrDyn *scr_js_wrapper_guard(ScrDyn *value, ScrStr *consumer) {
-  if (scr_js_wrapper_found(value, 0)) {
+  if (scr_js_wrapper_found(value)) {
     scr_js_wrapper_refuse(consumer);
     return NULL;
   }
@@ -461,7 +540,7 @@ ScrDyn *scr_js_wrapper_guard(ScrDyn *value, ScrStr *consumer) {
 ScrArr *scr_js_wrapper_guard_list(ScrArr *values, ScrStr *consumer) {
   for (size_t i = 0; i < values->len; i++) {
     ScrDyn *value = scr_arr_get_ref(values, (double)i); /* +1 */
-    bool found = scr_js_wrapper_found(value, 0);
+    bool found = scr_js_wrapper_found(value);
     scr_dyn_release(value);
     if (found) {
       scr_js_wrapper_refuse(consumer);
@@ -471,25 +550,18 @@ ScrArr *scr_js_wrapper_guard_list(ScrArr *values, ScrStr *consumer) {
   return scr_arr_retain(values);
 }
 
-/* Whether `name` on `value` resolves to this unit's String.prototype
- * method of that name: the compiler then runs its own lowering of the
- * method on ToString of the receiver (scr_js_wrapper_this_string), which
- * is what the builtin does. The read runs any getter on the chain, as the
- * member read of a call does. */
-bool scr_js_wrapper_is_string_method(ScrDyn *value, ScrStr *name) {
-  if (value->kind != SCR_DYN_OBJ) return false;
-  ScrDyn *member = scr_dyn_obj_read(value, name->data, name->len);
-  if (!member) return false;
-  bool builtin = false;
-  if (member->kind == SCR_DYN_FUNC && member->v.fn.thunk == scr_js_wrapper_method) {
-    ScrDyn *member_name = scr_box_get_ref(member->v.fn.clo->caps[0]);
-    ScrDyn *kind = scr_box_get_ref(member->v.fn.clo->caps[1]);
-    builtin = (int)kind->v.num == SCR_JS_WRAPPER_STRING && member_name->v.str->len == name->len &&
-              memcmp(member_name->v.str->data, name->data, name->len) == 0;
-    scr_dyn_release(kind);
-    scr_dyn_release(member_name);
-  }
-  scr_dyn_release(member);
+/* Whether `member`, the value a call read as the callee's member `name`,
+ * is this unit's String.prototype method of that name: the compiler then
+ * runs its own lowering of the method on ToString of the receiver
+ * (scr_js_wrapper_this_string), which is what the builtin does. */
+bool scr_js_wrapper_is_string_method(ScrDyn *member, ScrStr *name) {
+  if (member->kind != SCR_DYN_FUNC || member->v.fn.thunk != scr_js_wrapper_method) return false;
+  ScrDyn *member_name = scr_box_get_ref(member->v.fn.clo->caps[0]);
+  ScrDyn *kind = scr_box_get_ref(member->v.fn.clo->caps[1]);
+  bool builtin = (int)kind->v.num == SCR_JS_WRAPPER_STRING && member_name->v.str->len == name->len &&
+                 memcmp(member_name->v.str->data, name->data, name->len) == 0;
+  scr_dyn_release(kind);
+  scr_dyn_release(member_name);
   return builtin;
 }
 

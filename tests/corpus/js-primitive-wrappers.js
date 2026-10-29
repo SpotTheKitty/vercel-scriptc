@@ -57,3 +57,29 @@ try {
 } catch (error) {
   console.log("brand", error.constructor.name, error.message);
 }
+
+// The prototypes are themselves wrappers of "", 0 and false, as in Node.
+const stringPrototype = Object.getPrototypeOf(s);
+const numberPrototype = Object.getPrototypeOf(n);
+const booleanPrototype = Object.getPrototypeOf(new Boolean(true));
+console.log("prototype values", stringPrototype.valueOf() === "", numberPrototype.valueOf(), booleanPrototype.valueOf());
+console.log("prototype strings", stringPrototype.length, `${numberPrototype}`, String(booleanPrototype), numberPrototype + 1);
+console.log("prototype tags", Object.prototype.toString.call(stringPrototype), Object.prototype.toString.call(numberPrototype));
+console.log("prototype instances", stringPrototype instanceof String, Object.getOwnPropertyNames(stringPrototype).slice(0, 2).join());
+
+// A string-named method call on a dynamic object reads the member once.
+let trimReads = 0;
+const trimmed = {
+  get trim() {
+    trimReads++;
+    return trimReads === 1 ? () => "first read" : () => "second read";
+  },
+};
+const callTrim = (value) => value.trim();
+console.log("member reads", callTrim(trimmed), trimReads, callTrim("  text  "));
+
+// A graph that shares its objects, in a program with wrappers: the wrapper
+// check before console.log searches each object once.
+let sharedGraph = { leaf: 1 };
+for (let i = 0; i < 40; i++) sharedGraph = { left: sharedGraph, right: sharedGraph };
+console.log(sharedGraph);

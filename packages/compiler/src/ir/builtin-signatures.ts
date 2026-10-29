@@ -3703,9 +3703,10 @@ function buildLibFnSignatures() {
      * consumer). guardList checks each element. */
     "wrapper.guard": { argTypes: [DYN, STRING], result: DYN },
     "wrapper.guardList": { argTypes: [arrayOf(DYN), STRING], result: arrayOf(DYN) },
-    /** Whether the member `name` of the value is the builtin
-     * String.prototype method (scr_js_wrapper_is_string_method), and the
-     * method's receiver, ToString of the value (scr_js_wrapper_this_string). */
+    /** Whether a member value a call read as `name` is the builtin
+     * String.prototype method of that name (scr_js_wrapper_is_string_method),
+     * and the method's receiver, ToString of the value
+     * (scr_js_wrapper_this_string). */
     "wrapper.isStringMethod": { argTypes: [DYN, STRING], result: BOOL },
     "wrapper.thisString": { argTypes: [DYN, STRING], result: DYN },
     "fs.callbackValue": { argTypes: [STRING], result: DYN },
