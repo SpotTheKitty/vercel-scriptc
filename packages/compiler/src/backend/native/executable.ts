@@ -718,7 +718,17 @@ export async function compileCInternal(
   let icuArchive = icu
     ? (icuPack?.archive ?? icuArchivePath(driver, vendorBuildIdentity, vendorCacheRoot))
     : null;
-  let icuIncludeDirs: readonly string[] = icuPack === null ? [] : [icuPack.include];
+  // scr_intl.c's ICU headers. They are known before the runtime-object flags
+  // are: those flags compile every runtime unit, so without them a cached
+  // scr_intl.o would take whatever ICU headers the host has.
+  const icuSource =
+    icu && icuPack === null ? join(await ensureIcuSources(vendorCacheRoot), "source") : null;
+  const icuIncludeDirs: readonly string[] =
+    icuPack !== null
+      ? [icuPack.include]
+      : icuSource !== null
+        ? [join(icuSource, "common"), join(icuSource, "i18n")]
+        : [];
 
   // ours would collide; see scr_regex.c) — the standalone objects are for
   // static builds only.
@@ -784,8 +794,6 @@ export async function compileCInternal(
           ? await materialize()
           : await stageVendorInputs(materialize, join(stageRoot, "icu"));
       icuArchive = paths[0]!;
-      const icuSource = join(await ensureIcuSources(materializeCacheRoot), "source");
-      icuIncludeDirs = [join(icuSource, "common"), join(icuSource, "i18n")];
     }
     if (regex) {
       for (const object of lreObjectPaths(
@@ -924,6 +932,7 @@ export async function compileCInternal(
     ...(regex ? ["-I", vendorEngineDir()] : []),
     ...(zlibObjects.length > 0 ? ["-I", vendorZlibDir()] : []),
     ...(tlsArchive !== null ? ["-I", join(vendorTlsDir(), "include")] : []),
+    ...icuIncludeDirs.flatMap((dir) => ["-I", dir]),
   ];
   // Keep sanitizer runtime objects optimized in both postures. Large dev
   // programs still compile at O0, avoiding an expensive LLVM optimization

@@ -23,6 +23,7 @@
  * That is what lets the zero-cost gate assert that a non-Intl binary links
  * no ICU symbol at all. */
 #include "scr_runtime.h"
+#include "scr_intl_utf16.h"
 #include "scr_number.h"
 
 #include <unicode/ubrk.h>
@@ -36,6 +37,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,9 +53,12 @@
 
 /* ── data ─────────────────────────────────────────────────────────────
  * ICU keeps the mapped data alive for the process lifetime, so the load
- * happens exactly once and never unmaps. */
+ * happens exactly once and never unmaps. Worker threads can make the first
+ * ICU call at the same time: pthread_once runs the load on one of them and
+ * holds the others until it has finished, so none reads a partial result. */
 
-static int scr_intl_data_state; /* 0 = not tried, 1 = ready, 2 = failed */
+static pthread_once_t scr_intl_data_once = PTHREAD_ONCE_INIT;
+static bool scr_intl_data_ready;
 
 /* The default locale every formatter and the default word segmenter use,
  * resolved with the data (scr_intl_default_locale). */
@@ -117,12 +122,10 @@ static void scr_intl_default_locale(void) {
   snprintf(scr_intl_locale, sizeof scr_intl_locale, "%s", name);
 }
 
-/** True once ICU can resolve data: the file beside the executable, else
- * whatever ICU's own search finds (ICU_DATA). Never throws; the callers
- * do, with the same message. */
-static bool scr_intl_data(void) {
-  if (scr_intl_data_state != 0) return scr_intl_data_state == 1;
-  scr_intl_data_state = 2;
+/** Points ICU at its data (the file beside the executable, else whatever
+ * ICU's own search finds, ICU_DATA), probes it and resolves the default
+ * locale. Runs once per process (scr_intl_data). */
+static void scr_intl_data_load(void) {
   char dir[PATH_MAX];
   if (scr_intl_exe_dir(dir, sizeof dir)) {
     char path[PATH_MAX];
@@ -136,11 +139,17 @@ static bool scr_intl_data(void) {
    * Everything else this unit formats resolves through the same data. */
   UErrorCode status = U_ZERO_ERROR;
   UNumberFormat *probe = unum_open(UNUM_DECIMAL, NULL, 0, NULL, NULL, &status);
-  if (U_FAILURE(status) || probe == NULL) return false;
+  if (U_FAILURE(status) || probe == NULL) return;
   unum_close(probe);
   scr_intl_default_locale();
-  scr_intl_data_state = 1;
-  return true;
+  scr_intl_data_ready = true;
+}
+
+/** True once ICU can resolve data. Never throws; the callers do, with the
+ * same message. */
+static bool scr_intl_data(void) {
+  (void)pthread_once(&scr_intl_data_once, scr_intl_data_load);
+  return scr_intl_data_ready;
 }
 
 /** Throw the missing-data Error (Node cannot reach this: its ICU data is
@@ -155,62 +164,22 @@ static void scr_intl_no_data(void) {
 /* ── WTF-8 ↔ UTF-16 ───────────────────────────────────────────────────
  * ScrStr storage is canonical WTF-8 (a lone surrogate is its 3-byte
  * generalized form), so both directions preserve lone surrogates and
- * every public offset stays a UTF-16 unit count. */
+ * every public offset stays a UTF-16 unit count. Bytes that are not WTF-8
+ * decode to U+FFFD (scr_intl_utf16.h), so the UTF-16 copy holds exactly the
+ * units it reports. */
 
-static int32_t scr_intl_units(const char *data, size_t len) {
-  int32_t units = 0;
-  for (size_t at = 0; at < len;) {
-    unsigned char byte = (unsigned char)data[at];
-    if (byte < 0x80) at += 1;
-    else if (byte < 0xe0) at += 2;
-    else if (byte < 0xf0) at += 3;
-    else {
-      at += 4;
-      units++; /* a non-BMP code point is two units */
-    }
-    units++;
-  }
-  return units;
-}
-
-/** A UTF-16 copy of `s`, NUL-terminated; *units receives its length.
- * Never NULL for a successful call (an empty string allocates one unit). */
+/** A UTF-16 copy of `s`, NUL-terminated; *units receives the number of
+ * units written. Never NULL for a successful call (an empty string
+ * allocates one unit). */
 static UChar *scr_intl_to_utf16(const ScrStr *s, int32_t *units) {
-  const char *data = s->data;
-  size_t len = s->len;
-  int32_t count = scr_intl_units(data, len);
-  UChar *text = malloc(((size_t)count + 1) * sizeof *text);
+  const unsigned char *data = (const unsigned char *)s->data;
+  size_t count = scr_intl_utf16_units(data, s->len);
+  if (count > INT32_MAX - 1) scr_trap("scriptc: string too long for Intl\n");
+  UChar *text = malloc((count + 1) * sizeof *text);
   if (text == NULL) scr_trap("scriptc: out of memory\n");
-  int32_t at = 0;
-  for (size_t pos = 0; pos < len;) {
-    unsigned char byte = (unsigned char)data[pos];
-    uint32_t cp;
-    size_t size;
-    if (byte < 0x80) {
-      cp = byte;
-      size = 1;
-    } else if (byte < 0xe0) {
-      cp = ((uint32_t)(byte & 0x1f) << 6) | ((unsigned char)data[pos + 1] & 0x3fu);
-      size = 2;
-    } else if (byte < 0xf0) {
-      cp = ((uint32_t)(byte & 0x0f) << 12) | (((unsigned char)data[pos + 1] & 0x3fu) << 6) |
-           ((unsigned char)data[pos + 2] & 0x3fu);
-      size = 3;
-    } else {
-      cp = ((uint32_t)(byte & 0x07) << 18) | (((unsigned char)data[pos + 1] & 0x3fu) << 12) |
-           (((unsigned char)data[pos + 2] & 0x3fu) << 6) | ((unsigned char)data[pos + 3] & 0x3fu);
-      size = 4;
-    }
-    if (cp > 0xffff) {
-      text[at++] = (UChar)(0xd800 + ((cp - 0x10000) >> 10));
-      text[at++] = (UChar)(0xdc00 + ((cp - 0x10000) & 0x3ff));
-    } else {
-      text[at++] = (UChar)cp;
-    }
-    pos += size;
-  }
-  text[at] = 0;
-  *units = count;
+  size_t written = scr_intl_utf16_fill(data, s->len, (uint16_t *)text);
+  text[written] = 0;
+  *units = (int32_t)written;
   return text;
 }
 

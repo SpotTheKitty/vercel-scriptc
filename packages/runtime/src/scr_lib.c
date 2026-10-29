@@ -626,9 +626,11 @@ ScrArr *scr_process_argv(void) {
     int argc = scr_lib_arg_count();
     scr_argv_arr = scr_arr_new(SCR_ELEM_STR, (size_t)argc + 1);
     scr_arr_push_ref(scr_argv_arr, scr_str_new("scriptc", 7));
+    /* Node decodes each argument as UTF-8, replacing malformed bytes with
+     * U+FFFD. */
     for (int i = 0; i < argc; i++) {
       const char *a = scr_lib_arg(i);
-      scr_arr_push_ref(scr_argv_arr, scr_str_new(a, strlen(a)));
+      scr_arr_push_ref(scr_argv_arr, scr_str_from_utf8_lossy((const uint8_t *)a, strlen(a)));
     }
   }
   return scr_arr_retain(scr_argv_arr);
@@ -2828,7 +2830,7 @@ void scr_process_set_title(const ScrStr *title) {
 ScrStr *scr_process_argv0(void) {
   if (scr_lib_arg_count() < 1) return scr_str_new("", 0);
   const char *a = scr_lib_arg(0);
-  return scr_str_new(a, strlen(a));
+  return scr_str_from_utf8_lossy((const uint8_t *)a, strlen(a));
 }
 
 static SCR_TL ScrDyn *scr_release_object;
@@ -6650,7 +6652,8 @@ ScrScandir *scr_fs_scandir(ScrStr *path) {
         scr_trap("scriptc: out of memory\n");
       }
     }
-    s->names[s->len] = scr_str_new(ent->d_name, strlen(ent->d_name));
+    /* Decoded as UTF-8 with U+FFFD for malformed bytes, as Node does. */
+    s->names[s->len] = scr_str_from_utf8_lossy((const uint8_t *)ent->d_name, strlen(ent->d_name));
     s->kinds[s->len] = kind;
     s->len++;
   }
@@ -6896,7 +6899,9 @@ bool scr_dir_read(ScrDir *d, ScrStr **name, double *kind) {
       return false;
     }
     if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-    *name = scr_str_new(ent->d_name, strlen(ent->d_name));
+    /* Node decodes an entry name as UTF-8, replacing malformed bytes with
+     * U+FFFD. */
+    *name = scr_str_from_utf8_lossy((const uint8_t *)ent->d_name, strlen(ent->d_name));
     *kind = scr_dir_entry_kind(d, ent);
     return true;
   }
