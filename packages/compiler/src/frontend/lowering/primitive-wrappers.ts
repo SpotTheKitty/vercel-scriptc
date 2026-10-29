@@ -33,19 +33,22 @@ export const WRAPPER_KIND_NUMBER: Record<WrapperKind, number> = {
 };
 
 /** Whether any compiled source creates a primitive wrapper: a `new` of the
- * stdlib String, Number, Boolean or Object constructor with an argument, or
- * a call of the stdlib Object with an argument. Until a program has one, no
- * value is a wrapper, so the boxed interface types keep their primitive
- * mapping and every fold that relies on it stays. */
+ * stdlib String, Number or Boolean constructor (with or without an
+ * argument: `new String()` is a wrapper over "", `new Number()` over 0 and
+ * `new Boolean()` over false), or a call of the stdlib Object with an
+ * argument. `new Object()` without one is a fresh plain object, so it is
+ * not a wrapper. Until a program has one, no value is a wrapper, so the
+ * boxed interface types keep their primitive mapping and every fold that
+ * relies on it stays. */
 export function programCreatesWrappers(lowerer: Lowerer): boolean {
   for (const sf of lowerer.program.getSourceFiles()) {
     if (sf.isDeclarationFile || !isJsSourceFile(sf)) continue;
     const text = sf.text;
     if (
-      !text.includes("String(") &&
-      !text.includes("Number(") &&
-      !text.includes("Boolean(") &&
-      !text.includes("Object(")
+      !text.includes("String") &&
+      !text.includes("Number") &&
+      !text.includes("Boolean") &&
+      !text.includes("Object")
     )
       continue;
     let found = false;
@@ -53,16 +56,16 @@ export function programCreatesWrappers(lowerer: Lowerer): boolean {
       if (found) return;
       if (
         (ts.isNewExpression(node) || ts.isCallExpression(node)) &&
-        ts.isIdentifier(node.expression) &&
-        (node.arguments?.nodes.length ?? 0) > 0
+        ts.isIdentifier(node.expression)
       ) {
         const name = node.expression.text;
-        const isNew = ts.isNewExpression(node);
-        if (
-          ((isNew && (name === "String" || name === "Number" || name === "Boolean")) ||
-            name === "Object") &&
-          lowerer.isStdlibGlobal(node.expression, name)
-        ) {
+        // A `new` of a boxed constructor is a wrapper even without an
+        // argument; Object is a wrapper site only when it converts a value.
+        const wrapperNew =
+          ts.isNewExpression(node) &&
+          (name === "String" || name === "Number" || name === "Boolean");
+        const toObject = name === "Object" && (node.arguments?.nodes.length ?? 0) > 0;
+        if ((wrapperNew || toObject) && lowerer.isStdlibGlobal(node.expression, name)) {
           found = true;
           return;
         }
