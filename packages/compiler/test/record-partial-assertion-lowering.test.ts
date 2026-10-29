@@ -114,3 +114,52 @@ test("a write of a field a partial assertion never wrote throws before storing",
     },
   ]);
 });
+
+test("a read of an optional field a partial assertion omits yields undefined", async () => {
+  const nodes = await moduleNodes<{
+    kind: string;
+    cond?: { kind: string; field?: string };
+    else_?: { kind: string; fn?: string };
+  }>(
+    `interface N { content: string; note?: string }
+    function read(value: N): string | undefined { return value.note; }
+    read({ content: "c" } as N);
+    read({} as N);
+    export {};
+    `,
+  );
+  const guard = nodes.find(
+    (n) => n.kind === "ternary" && n.cond?.kind === "recordHas" && n.cond.field === "note",
+  );
+  expect(guard).toBeDefined();
+  expect(guard!.else_?.fn).not.toBe("error.nodeThrow");
+});
+
+test("a write of a field a partial assertion never wrote evaluates the value before the check", async () => {
+  const nodes = await moduleNodes<{
+    kind: string;
+    localId?: string;
+    body?: { kind: string; localId?: string; cond?: { kind: string; field?: string } }[];
+  }>(
+    `${TR}function value(): string { return "x"; }
+    function write(target: TR): void { target.content = value(); }
+    write({ truncated: true } as TR);
+    export {};
+    `,
+  );
+  const body = nodes
+    .filter((n) => n.kind === "block")
+    .map((n) => n.body ?? [])
+    .find((stmts) =>
+      stmts.some(
+        (s) => s.kind === "if" && s.cond?.kind === "recordHas" && s.cond.field === "content",
+      ),
+    );
+  expect(body).toBeDefined();
+  const saved = body!.findIndex(
+    (s) => s.kind === "varDecl" && s.localId?.includes("partialWriteValue") === true,
+  );
+  const check = body!.findIndex((s) => s.kind === "if");
+  expect(saved).toBeGreaterThanOrEqual(0);
+  expect(saved).toBeLessThan(check);
+});

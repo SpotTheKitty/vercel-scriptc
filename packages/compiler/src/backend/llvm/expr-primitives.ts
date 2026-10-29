@@ -1531,10 +1531,12 @@ export function emitRecordExpr(
       const absent = host.fieldAbsentTest(v, unionId);
       const present = B.tmp();
       B.line(`${present} = xor i1 ${absent}, true`);
+      // The field load can end in a later block (a view's slot read).
+      const checked = B.currentLabel();
       B.br(join);
       B.startBlock(join);
       const answer = B.tmp();
-      B.line(`${answer} = phi i1 [ false, %${from} ], [ ${present}, %${check} ]`);
+      B.line(`${answer} = phi i1 [ false, %${from} ], [ ${present}, %${checked} ]`);
       return { name: answer, type: e.type };
     }
     case "fieldAbsent":

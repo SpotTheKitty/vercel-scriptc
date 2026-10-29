@@ -22,4 +22,30 @@ console.log(render(false, "out"));
 const full: TruncationResult = { content: "c", truncated: false, truncatedBy: null, totalLines: 3, firstLineExceedsLimit: false };
 const p = new Panel(); p.setComplete(full);
 console.log(p.summary(), p.dump(), p.keys(), p.hasContent(), full.totalLines + 1);
+
+// An optional field the literal omits reads as undefined, and `in` answers
+// false for it.
+interface Note { content: string; truncated: boolean; note?: string; count?: number }
+function note(flag: boolean): Note {
+  return flag ? ({ truncated: true } as Note) : { content: "c", truncated: false, note: "n" };
+}
+const omitted = note(true);
+console.log(omitted.note, omitted.note ?? "none", omitted.count === undefined, typeof omitted.note);
+console.log("note" in omitted, "truncated" in omitted, "content" in omitted);
+const written = note(false);
+console.log(written.note, "note" in written, "count" in written);
+
+// A write of a field the literal omits evaluates its right side first.
+const order: string[] = [];
+function rhs(): string {
+  order.push("rhs");
+  return "v";
+}
+const target = note(true);
+try {
+  target.content = rhs();
+} catch {
+  order.push("caught");
+}
+console.log(order[0]);
 export {};
