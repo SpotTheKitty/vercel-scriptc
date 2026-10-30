@@ -1179,8 +1179,11 @@ export class LlDyn {
         const struct = mangleRecordStruct(sourceId);
         const base = host.nullableUnions.fieldBase(sourceId);
         const offsets = target.fields.map((field) => {
-          const index = source.fields.findIndex((f) => f.name === field.name) + base;
-          return `${S} ptrtoint (ptr getelementptr (%${struct}, ptr null, i32 0, i32 ${index}) to ${S})`;
+          const index = source.fields.findIndex((f) => f.name === field.name);
+          // A partial view's target field the source does not declare has
+          // no slot: all ones (SIZE_MAX) marks it absent (record-views.ts).
+          if (index < 0) return `${S} -1`;
+          return `${S} ptrtoint (ptr getelementptr (%${struct}, ptr null, i32 0, i32 ${index + base}) to ${S})`;
         });
         const offsetTable = `${table}_${k}`;
         this.defs.push(

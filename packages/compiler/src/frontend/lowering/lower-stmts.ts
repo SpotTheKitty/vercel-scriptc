@@ -1,6 +1,7 @@
 import { lowerStaticPrivateAssignment } from "./private-statics.js";
 import type { DiagnosticCode } from "../../diagnostics/codes.js";
 import { keepsInitializerLayout, notePreservedLayout } from "./structural-instances.js";
+import { partialFieldRead } from "./partial-assertions.js";
 import { jsGlobalValueByName } from "./global-values.js";
 import { lowerTupleAliasDecl, stripTypeWrappers } from "./typed-arguments.js";
 import {
@@ -3858,6 +3859,10 @@ export function lowerBindingPattern(
       type: fieldType,
       loc,
     };
+    // A field some partial record assertion leaves unwritten (a partial
+    // record view, partial-assertions.ts): the element read throws the
+    // catchable TypeError instead of reading a slot the view lacks.
+    value = partialFieldRead(lowerer, srcRef(), srcType.shapeId, propName, fieldType, loc) ?? value;
     // `{ tld = "localhost" }`: the element default applies exactly when
     // the field holds the undefined arm — the same undefined test and
     // narrow/retag as a defaulted parameter's prologue (declareParams).

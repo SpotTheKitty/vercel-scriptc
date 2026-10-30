@@ -64,6 +64,7 @@ export interface EarlyExecutableNativeFeatures {
   eventTarget?: boolean;
   wasm?: boolean;
   warningReplace?: boolean;
+  recordViewPartial?: boolean;
   stdioExtended?: boolean;
   /** Error-taking write completion callbacks: SCR_STREAM_WRITE_ERRORS. */
   streamWriteErrors?: boolean;

@@ -6311,6 +6311,37 @@ function validateFunction(
         ) {
           err(`dynCheck against non-JSON-representable type ${e.type.kind}`, e.loc);
         }
+        if (e.partialView === true) {
+          // A partial record assertion (record-views.ts): the operand is a
+          // live record whose fields are a SUBSET of the target's, with
+          // equal types, so the view lacks only properties the record
+          // never had.
+          if (
+            e.type.kind !== "record" ||
+            e.value.kind !== "dynFrom" ||
+            e.value.liveRef !== true ||
+            e.value.value.type.kind !== "record"
+          ) {
+            err(`partialView dynCheck needs a live-record operand and a record target`, e.loc);
+            break;
+          }
+          const target = records.get(e.type.shapeId);
+          const source = records.get(e.value.value.type.shapeId);
+          if (!target || !source) {
+            err(`partialView dynCheck names an unknown record shape`, e.loc);
+            break;
+          }
+          for (const field of source.fields) {
+            const found = target.fields.find((f) => f.name === field.name);
+            if (!found || typeKey(found.type) !== typeKey(field.type)) {
+              err(
+                `partialView source field "${field.name}" is not a target field with an equal type`,
+                e.loc,
+              );
+              break;
+            }
+          }
+        }
         break;
       }
       default: {

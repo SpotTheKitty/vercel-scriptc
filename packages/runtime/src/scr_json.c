@@ -4405,10 +4405,23 @@ void *scr_dyn_record_view(ScrDyn *d, const ScrRecordViewSource *sources, size_t 
   return view;
 }
 
-/* The slot of field `position` of a view (emitted view guards, cold). */
+/* The slot of field `position` of a view (emitted view guards, cold). A
+ * PARTIAL view (a record literal asserted to a wider record type) holds
+ * SIZE_MAX for every field its viewed record does not declare: the
+ * SCR_RECORD_VIEW_PARTIAL build of this unit answers NULL for it, the guard
+ * that gets NULL stops with scr_trap and the program's own message, and a
+ * presence test asks for the same slot and answers by it. Only a program
+ * with such an assertion links that build (runtime-pack-matrix.mjs); every
+ * other program links this default object, whose bytes are unchanged. */
 void *scr_record_view_slot(void *view, size_t position) {
   ScrRecordSource *entry = scr_record_source_slot(view);
+#ifdef SCR_RECORD_VIEW_PARTIAL
+  size_t offset = entry->offsets[position];
+  if (offset == SIZE_MAX) return NULL;
+  return (char *)entry->viewed + offset;
+#else
   return (char *)entry->viewed + entry->offsets[position];
+#endif
 }
 
 /* The address of field `position` of a value of a view target type, whose

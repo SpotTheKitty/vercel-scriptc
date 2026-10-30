@@ -4109,6 +4109,13 @@ export type IrExpr =
   /** `exact`: the value is known to be a capsule this program boxed from
    * exactly the class `type` names (a `dyn.typedRefKeyIs` test guards the
    * expression), so the check is one load of the capsule's instance. */
+  /** `partialView`: `value` is `dynFrom{liveRef}` of a record whose fields
+   * are a SUBSET of `type`'s, with equal types — a partial record literal
+   * asserted to a wider record type (`{ truncated: true } as
+   * TruncationResult`). The conversion answers a partial record view
+   * (record-views.ts): a `type` value whose fields the source lacks are
+   * absent, so presence tests answer false and reads of them throw the
+   * catchable TypeError. */
   /** `adopt`: the declaration-typed boundary's cast (decl-projection.ts).
    * The conversion preserves identity: a source object or array that
    * something else still references (reference count above one) is
@@ -4127,6 +4134,7 @@ export type IrExpr =
       preserveRefs?: true;
       adopt?: true;
       exact?: true;
+      partialView?: true;
       /** Shape inference's overlay: this conversion checks an
        * analysis-proven fact ("<package> <file>:<line>"); a failure is a
        * compiler analysis bug and reports itself as one. */
