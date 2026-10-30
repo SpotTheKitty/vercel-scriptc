@@ -329,6 +329,12 @@ typedef struct ScrDynTypedCast {
  * result as an owned (+1) dyn value. `args` entries are BORROWED. */
 typedef ScrDyn *(*ScrDynThunk)(ScrClosure *clo, ScrDyn *const *args, size_t argc);
 
+/* A compiled closure's jsval entry (scr_js.h words): calls the closure's
+ * jsval body with `args` (BORROWED words; a missing argument is undefined)
+ * and returns the result as an owned word. With an exception pending the
+ * word is undefined; callers test the exception cell, not the word. */
+typedef void *(*ScrDynJsEntry)(ScrClosure *clo, void *const *args, size_t argc);
+
 /* A compiled 'message' listener's typed entry: builds the closure's
  * parameter from the message's nodes (the readers below) and calls
  * the closure. Answers false, without calling it, when the message does
@@ -577,7 +583,7 @@ struct ScrDyn {
      * and `name` are static compiler-emitted literals (never freed); name
      * may be NULL (anonymous — inspect prints [Function (anonymous)]).
      * The dyn→closure ownership edge is traced by the cycle collector. */
-    struct { ScrClosure *clo; ScrDynThunk thunk; const char *sig; const char *name; uint32_t arity; ScrClassObj *class_obj; ScrDynMessageListener message; } fn;
+    struct { ScrClosure *clo; ScrDynThunk thunk; const char *sig; const char *name; uint32_t arity; ScrClassObj *class_obj; ScrDynMessageListener message; ScrDynJsEntry js; } fn;
     /* Native handles normally keep conservative ownership edges. Sets
      * backed by cycle-capable maps expose their edge to the collector.
      * Cache that allocation property: during collection the map may be
@@ -1826,6 +1832,9 @@ ScrDyn *scr_dyn_new_func(ScrClosure *clo, ScrDynThunk thunk, uint32_t arity, con
 /* Gives a function box made with thunk its typed message entry (an
  * EventEmitter listener registered from it keeps the entry). */
 void scr_dyn_func_set_message(ScrDyn *fn, ScrDynThunk thunk, ScrDynMessageListener listener);
+/* Gives a function box made with thunk its jsval entry. Emitted call sites
+ * of the dynamic tier load v.fn.js directly (at byte 72 on 64-bit targets). */
+void scr_dyn_func_set_js(ScrDyn *fn, ScrDynThunk thunk, ScrDynJsEntry entry);
 /* Sets a freshly boxed function's `length` (a builtin function value whose
  * length is not its adapter's parameter count). */
 void scr_dyn_function_set_length(ScrDyn *fn, uint32_t length);
