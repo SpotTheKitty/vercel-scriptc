@@ -48,4 +48,18 @@ try {
   order.push("caught");
 }
 console.log(order[0]);
+
+// An ordinary record of the asserted type keeps a slot for its absent
+// optional field, so a write adds the property.
+const plainNote: Note = { content: "c", truncated: false };
+plainNote.note = "added";
+console.log(plainNote.note, "note" in plainNote, JSON.stringify(plainNote));
+
+// A right side that reassigns the receiver's variable: the original
+// receiver takes the write.
+let reassigned: Note = { content: "first", truncated: false, note: "n" };
+const firstNote = reassigned;
+const otherNote: Note = { content: "other", truncated: true, note: "o" };
+reassigned.content = ((reassigned = otherNote), "changed");
+console.log(firstNote.content, otherNote.content, reassigned === otherNote);
 export {};

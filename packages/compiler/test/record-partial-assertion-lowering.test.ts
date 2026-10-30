@@ -115,11 +115,11 @@ test("a write of a field a partial assertion never wrote throws before storing",
   ]);
 });
 
-test("a read of an optional field a partial assertion omits yields undefined", async () => {
+test("an optional field a partial assertion omits keeps an absent slot, read without a check", async () => {
   const nodes = await moduleNodes<{
     kind: string;
     cond?: { kind: string; field?: string };
-    else_?: { kind: string; fn?: string };
+    fields?: { name: string; value: { kind: string } }[];
   }>(
     `interface N { content: string; note?: string }
     function read(value: N): string | undefined { return value.note; }
@@ -128,11 +128,17 @@ test("a read of an optional field a partial assertion omits yields undefined", a
     export {};
     `,
   );
-  const guard = nodes.find(
-    (n) => n.kind === "ternary" && n.cond?.kind === "recordHas" && n.cond.field === "note",
+  // The literal's layout holds the omitted optional field in its absent
+  // state, as an ordinary record of the asserted type does.
+  const literal = nodes.find(
+    (n) => n.kind === "recordLit" && n.fields?.some((f) => f.name === "note") === true,
   );
-  expect(guard).toBeDefined();
-  expect(guard!.else_?.fn).not.toBe("error.nodeThrow");
+  expect(literal?.fields?.find((f) => f.name === "note")?.value.kind).toBe("fieldAbsent");
+  expect(
+    nodes.some(
+      (n) => n.kind === "ternary" && n.cond?.kind === "recordHas" && n.cond.field === "note",
+    ),
+  ).toBe(false);
 });
 
 test("a write of a field a partial assertion never wrote evaluates the value before the check", async () => {
@@ -162,4 +168,48 @@ test("a write of a field a partial assertion never wrote evaluates the value bef
   const check = body!.findIndex((s) => s.kind === "if");
   expect(saved).toBeGreaterThanOrEqual(0);
   expect(saved).toBeLessThan(check);
+});
+
+test("a write of an optional field a partial assertion omits needs no guard", async () => {
+  const nodes = await moduleNodes<{ kind: string; cond?: { kind: string; field?: string } }>(
+    `interface N { content: string; note?: string }
+    function write(target: N): void { target.note = "x"; }
+    write({} as N);
+    write({ content: "c" });
+    export {};
+    `,
+  );
+  expect(
+    nodes.some((n) => n.kind === "if" && n.cond?.kind === "recordHas" && n.cond.field === "note"),
+  ).toBe(false);
+});
+
+test("a partial-field write saves its receiver when the right side may reassign it", async () => {
+  const nodes = await moduleNodes<{
+    kind: string;
+    body?: { kind: string; localId?: string; cond?: { kind: string; field?: string } }[];
+  }>(
+    `${TR}function value(): string { return "x"; }
+    let target: TR = { truncated: true } as TR;
+    target.content = value();
+    export {};
+    `,
+  );
+  const body = nodes
+    .filter((n) => n.kind === "block")
+    .map((n) => n.body ?? [])
+    .find((stmts) =>
+      stmts.some(
+        (s) => s.kind === "if" && s.cond?.kind === "recordHas" && s.cond.field === "content",
+      ),
+    );
+  expect(body).toBeDefined();
+  const receiver = body!.findIndex(
+    (s) => s.kind === "varDecl" && /%partialWrite(?!Value)/.test(s.localId ?? ""),
+  );
+  const value = body!.findIndex(
+    (s) => s.kind === "varDecl" && s.localId?.includes("partialWriteValue") === true,
+  );
+  expect(receiver).toBeGreaterThanOrEqual(0);
+  expect(receiver).toBeLessThan(value);
 });

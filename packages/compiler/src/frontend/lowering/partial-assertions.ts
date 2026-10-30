@@ -4,19 +4,20 @@
  * type may require more. Node erases the assertion: the value keeps the
  * literal's properties, and reading a field it never had yields undefined.
  * A record type has a fixed layout, so scriptc keeps the LITERAL's layout
- * (shape A — the written fields, with the asserted type's field types) and
+ * (shape A — the written fields and the asserted type's optional fields,
+ * these in their absent state, with the asserted type's field types) and
  * hands the asserted type B a PARTIAL record view of it (record-views.ts):
- * the value is a B whose record-source entry names A, and B fields A does
- * not declare are absent. Reflection through the view is exact.
+ * the value is a B whose record-source entry names A, and the required B
+ * fields A does not declare are absent. Reflection through the view is
+ * exact.
  *
  * This module finds those sites and answers, per target shape, which
- * fields some asserted literal leaves unwritten. The lowering consults it
- * for member reads and writes, destructuring and `in`, so a read of an
- * absent optional field yields undefined, as in Node, and a read of an
- * absent required field throws the catchable TypeError (Node yields
- * undefined — a documented divergence), instead of reaching a slot the
- * view does not have. Computed once for the whole program, on first use,
- * like the untyped-collection inference (js-collection-types.ts). */
+ * required fields some asserted literal leaves unwritten. The lowering
+ * consults it for member reads and writes, destructuring and `in`, so a
+ * read of such a field throws the catchable TypeError (Node yields
+ * undefined — a documented divergence) instead of reaching a slot the view
+ * does not have. Computed once for the whole program, on first use, like
+ * the untyped-collection inference (js-collection-types.ts). */
 
 import * as ts from "../ts7/adapter.js";
 import type { Lowerer } from "./lowerer.js";
@@ -37,6 +38,9 @@ import {
 export interface PartialAssertionSite {
   readonly target: IrType & { kind: "record" };
   readonly keys: readonly string[];
+  /** The optional B fields the literal does not write, which the literal's
+   * layout keeps in their absent state. */
+  readonly absent: readonly string[];
   readonly missing: ReadonlySet<string>;
   /** The asserted type's source spelling, for the throw messages. */
   readonly text: string;
@@ -49,7 +53,7 @@ interface PartialTarget {
 
 const NO_FIELDS: ReadonlySet<string> = new Set();
 
-/** The fields some asserted literal leaves unwritten on shapes of
+/** The required fields some asserted literal leaves unwritten on shapes of
  * `shapeId`; empty when no partial assertion produces that shape. */
 export function partialAssertionFields(lowerer: Lowerer, shapeId: string): ReadonlySet<string> {
   return partialTargetOf(lowerer, shapeId)?.missing ?? NO_FIELDS;
@@ -109,26 +113,27 @@ export function partialAssertionSite(
     // map, which a view has no slots for.
     if (!shape.fields.some((f) => f.name === key)) return null;
   }
-  let required = false;
+  const absent: string[] = [];
   for (const field of shape.fields) {
     if (keys.includes(field.name)) continue;
-    // The view has no slot for any field the literal does not write, an
-    // optional one included.
+    // An omitted optional field keeps a slot in the literal's layout, in its
+    // absent state (lowerPartialAssertion), as an ordinary record of the
+    // asserted type does: reads yield undefined, `in` answers false and a
+    // write adds the property. Only a required field can be missing.
+    if (field.type.kind === "union" && lowerer.armTag(field.type.unionId, UNDEFINED_T) >= 0) {
+      absent.push(field.name);
+      continue;
+    }
     missing.add(field.name);
-    if (!(field.type.kind === "union" && lowerer.armTag(field.type.unionId, UNDEFINED_T) >= 0))
-      required = true;
   }
-  // Omitting only optional fields needs no view: the literal at the
-  // asserted type's layout holds their absent state.
-  if (!required) return null;
-  return { target, keys, missing, text: lowerer.checker.typeToString(targetTs) };
+  if (missing.size === 0) return null;
+  return { target, keys, absent, missing, text: lowerer.checker.typeToString(targetTs) };
 }
 
 /** The checked read of `field` through a value of `shapeId` that a partial
- * assertion may have produced (undefined for an absent optional field, a
- * TypeError for an absent required one), or null when the field is always
- * present. `obj` is read twice (the presence test and the read), so it must
- * be safe to repeat. */
+ * assertion may have produced, or null when the field is always present.
+ * `obj` is read twice (the presence test and the read), so it must be safe
+ * to repeat. */
 export function partialFieldRead(
   lowerer: Lowerer,
   obj: IrExpr,
@@ -139,25 +144,17 @@ export function partialFieldRead(
 ): IrExpr | null {
   const target = partialTargetOf(lowerer, shapeId);
   if (target === null || !target.missing.has(field)) return null;
-  // An optional field the literal omits reads as undefined, as in Node.
-  const optional =
-    fieldType.kind === "union" && lowerer.armTag(fieldType.unionId, UNDEFINED_T) >= 0;
   return {
     kind: "ternary",
     cond: { kind: "recordHas", obj, shapeId, field, type: BOOL, loc },
     then: { kind: "recordGet", obj, shapeId, field, type: fieldType, loc },
-    else_: optional
-      ? lowerer.coerceToExpected(
-          { kind: "unitLit", unit: "undefined", type: UNDEFINED_T, loc },
-          fieldType,
-        )
-      : nodeThrowExpr(
-          1,
-          "",
-          `Cannot read property '${field}': the object asserted as '${target.text}' has no such property`,
-          fieldType,
-          loc,
-        ),
+    else_: nodeThrowExpr(
+      1,
+      "",
+      `Cannot read property '${field}': the object asserted as '${target.text}' has no such property`,
+      fieldType,
+      loc,
+    ),
     type: fieldType,
     loc,
   };
@@ -221,15 +218,24 @@ export function lowerPartialAssertion(
     const value = lowerer.coerceInto(prop, lowerer.lowerExprExpecting(initializer, type), type);
     return { name: key, type, value };
   });
+  for (const name of site.absent) {
+    const type = shape.fields.find((f) => f.name === name)!.type as IrType & { kind: "union" };
+    fields.push({
+      name,
+      type,
+      value: { kind: "fieldAbsent", unionId: type.unionId, type, loc },
+    });
+  }
   // A's identity is its name-sorted field list; its DECLARED order is the
-  // literal's, which JSON and Object.keys read through the view's capsule.
+  // literal's, which JSON and Object.keys read through the view's capsule,
+  // then the absent optional fields, which a later write appends.
   const shapeId = lowerer.shapes.intern(
     [...fields]
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
       .map((f) => ({ name: f.name, type: f.type })),
     false,
     undefined,
-    [...site.keys],
+    [...site.keys, ...site.absent],
   );
   const built: IrExpr = {
     kind: "recordLit",

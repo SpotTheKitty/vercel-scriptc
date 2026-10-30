@@ -908,13 +908,16 @@ export function fieldSetStmt(
   const refused = partialFieldWriteError(lowerer, target.shapeId, target.field, loc);
   if (refused !== null) {
     const obj = target.obj;
-    const stable = isSafeToRepeat(obj)
-      ? null
-      : lowerer.declareHiddenLocal("%partialWrite", obj.type);
-    const ref = stable ? varRef(stable.id, obj.type, loc) : obj;
     const saved = isSafeToRepeat(value)
       ? null
       : lowerer.declareHiddenLocal("%partialWriteValue", value.type);
+    // The receiver is saved whenever the value is: a right side can
+    // reassign the variable the receiver reads.
+    const stable =
+      isSafeToRepeat(obj) && saved === null
+        ? null
+        : lowerer.declareHiddenLocal("%partialWrite", obj.type);
+    const ref = stable ? varRef(stable.id, obj.type, loc) : obj;
     const written = saved ? varRef(saved.id, value.type, loc) : value;
     return {
       kind: "block",
