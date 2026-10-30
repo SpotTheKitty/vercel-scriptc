@@ -1,3 +1,4 @@
+import { lowerWrapperNew } from "./primitive-wrappers.js";
 import { lowerAsyncLocalStorageOptions } from "./builtins/async-context.js";
 import { shapeOverlayAnnotated } from "../shape-inference/index.js";
 import {
@@ -10075,6 +10076,21 @@ function lowerProgramClassNew(
   });
 }
 
+/** The supported map layout a contextual type pins for `new Map()`: the type
+ * itself, or the single map arm of a union — a nullable annotation such as
+ * `Map<K, V> | undefined`, or `ReadonlyMap<K, V> | undefined`, where a Map
+ * value can only inhabit the map arm and the no-argument constructor gives
+ * the checker nothing to infer the type arguments from. */
+function contextualMapLayout(lowerer: Lowerer, ctx: ts.Type): IrType | null {
+  const mapped = lowerer.mapTypeOf(ctx);
+  if (mapped?.kind === "map") return mapped;
+  if (mapped?.kind !== "union") return null;
+  const arms = (lowerer.unions.get(mapped.unionId)?.arms ?? []).filter(
+    (arm): arm is IrType & { kind: "map" } => arm.kind === "map",
+  );
+  return arms.length === 1 ? arms[0]! : null;
+}
+
 function assignedThisFieldType(lowerer: Lowerer, expr: ts.NewExpression): IrType | null {
   const parent = expr.parent;
   if (
@@ -10193,6 +10209,8 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
       return lowerWithInlineRequireInit(lowerer, req, () => lowerNew(lowerer, expr));
     }
   }
+  const wrapper = lowerWrapperNew(lowerer, expr);
+  if (wrapper) return wrapper;
   const worker = lowerWorkerNew(lowerer, expr);
   if (worker) return worker;
   const readlineUi = lowerReadlineUiNew(lowerer, expr) ?? lowerReadlineInterfaceNew(lowerer, expr);
@@ -11068,10 +11086,10 @@ export function lowerNew(lowerer: Lowerer, expr: ts.NewExpression): IrExpr {
         mapped = lowerer.mapTypeOf(inferred);
       } else if (mapped?.kind !== "map" || contextualSeed) {
         const ctx = lowerer.checker.getContextualType(expr);
-        const ctxMapped = ctx ? lowerer.mapTypeOf(ctx) : null;
-        if (ctx && ctxMapped?.kind === "map") {
+        const ctxMap = ctx ? contextualMapLayout(lowerer, ctx) : null;
+        if (ctx && ctxMap !== null) {
           tsType = ctx;
-          mapped = ctxMapped;
+          mapped = ctxMap;
         }
       }
       // `new Map(source)` the checker types `Map<any, any>` because the
