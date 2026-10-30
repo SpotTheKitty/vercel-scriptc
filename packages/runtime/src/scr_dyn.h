@@ -1432,6 +1432,12 @@ void scr_dyn_typed_ref_bind_bag_class(ScrDyn *d, const ScrDynTypedBagClassOps *o
  * exception pending, when the prototype hook threw. Never runs user
  * code. */
 ScrDyn *scr_dyn_typed_ref_bag_method(const ScrDyn *d, const char *key, size_t key_len);
+/* The own data property `key` of a class instance's capsule, +1, as its
+ * view holds it; NULL when the instance has no such own data property, or
+ * when `key` names a member of its class's prototype or of
+ * Object.prototype. NULL with an exception pending when building the view
+ * threw. */
+ScrDyn *scr_dyn_typed_ref_own_member(const ScrDyn *d, const char *key, size_t key_len);
 /* The constructor name of a class instance capsule's own class, for
  * util.inspect; NULL when the capsule is not a bound class instance, its
  * class is anonymous, or its prototype was replaced. */

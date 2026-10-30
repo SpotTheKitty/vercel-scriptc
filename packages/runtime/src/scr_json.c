@@ -4762,6 +4762,52 @@ bool scr_dyn_typed_ref_class_has(const ScrDyn *d, const ScrStr *key) {
   return ops && scr_dyn_name_in_strs(key, ops->names, ops->count);
 }
 
+ScrDyn *scr_dyn_typed_ref_own_member(const ScrDyn *d, const char *key, size_t key_len) {
+  if (d->kind != SCR_DYN_TYPED_REF || d->prototype) return NULL;
+  if (!d->v.typed_ref.bag_class) {
+    /* A class instance's view holds its own fields and the properties added
+     * to it, and its class's prototype members stay off the view. A name
+     * that is neither one of those members nor one of Object.prototype's
+     * can only be an own property, so the view is built (refreshed from the
+     * instance) for it. Other capsules answer through scr_dyn_invoke. */
+    const ScrDynTypedClassOps *klass = scr_typed_ref_class_ops(d);
+    if (!klass) return NULL;
+    ScrStr *name = scr_str_new(key, key_len);
+    bool member = scr_dyn_name_in_strs(name, klass->names, klass->count) || scr_dyn_object_proto_name(name);
+    scr_str_release(name);
+    if (member) return NULL;
+    ScrDyn *view = scr_dyn_typed_ref_materialize(d);
+    if (scr_exc_pending()) {
+      scr_dyn_release(view);
+      return NULL;
+    }
+    ScrDyn *found = NULL;
+    if (view && view->kind == SCR_DYN_OBJ) {
+      if (scr_dyn_is_layout(view)) {
+        ScrDyn **slot = scr_dyn_layout_slot(view, key, key_len);
+        if (slot) found = scr_dyn_retain(*slot);
+      } else {
+        const ScrDynEntry *own = scr_dyn_find_entry(view, key, key_len);
+        if (own && !own->accessor) found = scr_dyn_retain(own->value);
+      }
+    }
+    scr_dyn_release(view);
+    return found;
+  }
+  const ScrDynTypedBagClassOps *ops = (const ScrDynTypedBagClassOps *)(const void *)d->v.typed_ref.array;
+  void *instance = d->v.typed_ref.ptr;
+  const ScrDyn *bag = ops->bag(instance);
+  if (!bag || bag->kind != SCR_DYN_OBJ) return NULL;
+  const ScrDynEntry *own = scr_dyn_find_entry(bag, key, key_len);
+  if (!own || own->accessor) return NULL;
+  for (size_t i = 0; i < ops->count; i++) {
+    const ScrStr *name = ops->names[i];
+    if (name->len != key_len || memcmp(name->data, key, key_len) != 0) continue;
+    return own->writable ? ops->field(instance, i) : NULL;
+  }
+  return scr_dyn_retain(own->value);
+}
+
 static const ScrDynTypedRecordOps *scr_typed_ref_record_ops(const ScrDyn *d) {
   if (!d->v.typed_ref.record || d->v.typed_ref.materialized) return NULL;
   const ScrDynTypedRecordOps *ops = (const ScrDynTypedRecordOps *)(const void *)d->v.typed_ref.array;
