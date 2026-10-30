@@ -1214,6 +1214,11 @@ export class ClassDynamicDispatch {
    * classes included: the value's capsule can be any of its subclasses. */
   private readonly boxedStatic = new Set<string>();
   private readonly dispatches = new Map<string, Dispatch>();
+  /** Per receiver local of a call rewritten for a getter-only name, the
+   * classes whose instances it already reads the getter on. A later wave
+   * that reaches another class with the getter rewrites the fallback call
+   * for that class. */
+  private readonly getterReceivers = new Map<string, ReadonlySet<string>>();
   private readonly properties = new Map<string, PropertyDispatch>();
   private readonly computed = new Map<
     string,
@@ -1919,15 +1924,19 @@ export class ClassDynamicDispatch {
       fn: IrFunction,
       invoke: IrExpr & { kind: "dynInvoke" },
       capsules: readonly string[],
+      covered: ReadonlySet<string> | undefined,
     ): IrExpr => {
       const loc = invoke.loc;
       const receiverLocal = {
-        id: `${GETTER_RECEIVER}${fn.locals.length}`,
+        id: `${GETTER_RECEIVER}${this.getterReceivers.size}`,
         name: "receiver",
         type: DYN,
         mutable: false,
       };
       fn.locals.push(receiverLocal);
+      const keys = new Set<string>(capsules);
+      if (covered) for (const key of covered) keys.add(key);
+      this.getterReceivers.set(receiverLocal.id, keys);
       const calleeLocal = {
         id: `%dispatch.callee.${fn.locals.length}`,
         name: "callee",
@@ -3069,12 +3078,14 @@ export class ClassDynamicDispatch {
             invoke &&
             expr.kind === "dynInvoke" &&
             candidates(invoke.method).length === 0 &&
-            !staticCandidates(invoke.method) &&
-            // The other receivers' call this rewrite left in place.
-            !(expr.recv.kind === "varRef" && expr.recv.localId.startsWith(GETTER_RECEIVER))
+            !staticCandidates(invoke.method)
           ) {
-            const capsules = getterCapsules(invoke.method);
-            if (capsules.length > 0) return getterCall(fn, expr, capsules);
+            // The other receivers' call a rewrite left in place tests only
+            // the classes that rewrite did not.
+            const covered =
+              expr.recv.kind === "varRef" ? this.getterReceivers.get(expr.recv.localId) : undefined;
+            const capsules = getterCapsules(invoke.method).filter((key) => !covered?.has(key));
+            if (capsules.length > 0) return getterCall(fn, expr, capsules, covered);
           }
           if (
             !invoke ||

@@ -122,3 +122,35 @@ function filtered(value) {
 }
 console.log(new Material().map, doubled([1, 2, 3]).join(","), filtered([4, 5]).join(","));
 console.log(fixed(3.14159, 2), fixed(new Material(), 3), filtered(new Material()));
+// A second class with the same getter, constructed only in a method that
+// an untyped call reaches: its instances also read the getter before the
+// arguments.
+const order = [];
+class EarlyRunner {
+  get step() {
+    order.push("early-get");
+    return (value) => `early-${value}`;
+  }
+}
+class LateRunner {
+  get step() {
+    order.push("late-get");
+    return (value) => `late-${value}`;
+  }
+}
+class RunnerFactory {
+  make() {
+    return new LateRunner();
+  }
+}
+function noted(value) {
+  order.push(`arg-${value}`);
+  return value;
+}
+function step(target, value) {
+  return target.step(noted(value));
+}
+function made(factory) {
+  return factory.make();
+}
+console.log(step(new EarlyRunner(), 1), step(made(new RunnerFactory()), 2), order.join(","));
