@@ -149,6 +149,11 @@ export interface ShapeAnalysis {
   declValues(decl: Node): Set<Atom>;
   /** The classes a class declaration's chain contains, base last. */
   classChain(decl: Node): Node[];
+  /** Whether every instance of a class has the own field `name` before
+   * any code can observe the instance. */
+  fieldSurelyPresent(decl: Node, name: string): boolean;
+  /** The atom of a primitive type (`undefined`, `number`, …). */
+  prim(name: string): Atom;
   /** `if` statements in walked code whose condition is known: the branch
    * whose condition values never allowed it is absent from `walkedBranches`. */
   readonly branchIfs: ReadonlySet<ts.IfStatement>;
@@ -625,6 +630,8 @@ class Analyzer {
       fnOfInstance: this.fnOfInstance,
       declValues: (decl) => this.declValues(decl),
       classChain: (decl) => this.classChain(decl),
+      fieldSurelyPresent: (decl, name) => this.fieldSurelyPresent(decl, name),
+      prim: (name) => this.prim(name),
       branchIfs: this.branchIfs,
       walkedBranches: this.walkedBranches,
     };
@@ -1079,30 +1086,48 @@ class Analyzer {
     return out;
   }
 
-  /** Whether every instance of a class has the own field `name`: a class
-   * of its chain declares it, or a constructor stores it in a statement
-   * that runs whenever the constructor completes. */
+  /** Whether every instance of a class has the own field `name` before any
+   * code can observe the instance. Construction runs from the base class
+   * down, each class's field initializers and then its constructor body:
+   * the field counts when a declaration or a `this.name = …` statement of
+   * the constructor body defines it ahead of anything that reads `this` or
+   * passes it on (a call with `this`, a method call on it, a closure, a
+   * field initializer or right-hand side that reads it) and ahead of an
+   * early `return`. */
   fieldSurelyPresent(decl: Node, name: string): boolean {
-    for (const c of this.classChain(decl)) {
-      for (const m of list((c as ts.ClassLikeDeclaration).members)) {
-        if (isStatic(m)) continue;
-        const mn = (m as { name?: Node }).name;
-        if (ts.isPropertyDeclaration(m) && mn !== undefined && propertyNameText(mn) === name)
-          return true;
-        if (!ts.isConstructorDeclaration(m) || m.body === undefined) continue;
-        for (const st of list(m.body.statements)) {
-          if (ts.isVariableStatement(st)) continue;
-          if (!ts.isExpressionStatement(st)) break;
-          const e = st.expression;
-          if (
-            ts.isBinaryExpression(e) &&
-            e.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-            ts.isPropertyAccessExpression(e.left) &&
-            e.left.expression.kind === ts.SyntaxKind.ThisKeyword &&
-            e.left.name.text === name
-          )
-            return true;
+    for (const c of this.classChain(decl).reverse()) {
+      const members = list((c as ts.ClassLikeDeclaration).members);
+      for (const m of members) {
+        if (isStatic(m) || !ts.isPropertyDeclaration(m)) continue;
+        if (m.initializer !== undefined && observesThis(m.initializer)) return false;
+        if (propertyNameText(m.name) === name) return true;
+      }
+      const ctor = members.find(
+        (m): m is ts.ConstructorDeclaration =>
+          ts.isConstructorDeclaration(m) && m.body !== undefined,
+      );
+      for (const st of ctor === undefined ? [] : list(ctor.body!.statements)) {
+        const e = ts.isExpressionStatement(st) ? st.expression : undefined;
+        if (
+          e !== undefined &&
+          ts.isBinaryExpression(e) &&
+          e.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          ts.isPropertyAccessExpression(e.left) &&
+          e.left.expression.kind === ts.SyntaxKind.ThisKeyword
+        ) {
+          if (observesThis(e.right)) return false;
+          if (e.left.name.text === name) return true;
+          continue;
         }
+        // `super(…)` runs the base constructor, walked above.
+        if (
+          e !== undefined &&
+          ts.isCallExpression(e) &&
+          e.expression.kind === ts.SyntaxKind.SuperKeyword &&
+          !list(e.arguments).some(observesThis)
+        )
+          continue;
+        if (observesThis(st) || returnsEarly(st)) return false;
       }
     }
     return false;
@@ -4225,4 +4250,19 @@ function mayBeFalsy(a: Atom): boolean {
   if (a.kind === "top") return true;
   if (a.kind !== "prim") return false;
   return a.literal !== true;
+}
+
+/** Whether code reads `this` or `super`, at any depth. */
+function observesThis(node: Node): boolean {
+  if (node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword)
+    return true;
+  return ts.forEachChild(node, (child) => (observesThis(child) ? true : undefined)) === true;
+}
+
+/** Whether a constructor statement can end the constructor: a `return`
+ * outside the functions it declares. */
+function returnsEarly(node: Node): boolean {
+  if (ts.isReturnStatement(node)) return true;
+  if (ts.isFunctionLike(node) || ts.isClassLikeDeclaration(node)) return false;
+  return ts.forEachChild(node, (child) => (returnsEarly(child) ? true : undefined)) === true;
 }

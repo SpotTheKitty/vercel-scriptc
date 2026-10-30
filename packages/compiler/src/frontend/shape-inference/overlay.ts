@@ -854,6 +854,10 @@ export function planShapeOverlay(
         const id = analysis.fields.get(a)?.get(name);
         if (id !== undefined) for (const x of analysis.nodes[id]!.atoms) atoms.add(x);
       }
+      // In the program's own files, code that sees an instance before the
+      // constructor stores the field reads undefined from it.
+      if (atoms.size > 0 && !isPackageJsFile(sf) && !analysis.fieldSurelyPresent(cls, name))
+        atoms.add(analysis.prim("undefined"));
       return typeOf(atoms, false, 0);
     };
 

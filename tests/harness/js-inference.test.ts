@@ -43,6 +43,8 @@ const programs = [
   "4090-computed-key-tdz.js",
   // Fields an instance may lack.
   "8410-dynamic-class-instance-reads.js",
+  // Fields read before the constructor stores them.
+  "inferred-field-before-assignment.js",
 ];
 
 // Programs where the overlay types nothing: the proxy receiver makes the
